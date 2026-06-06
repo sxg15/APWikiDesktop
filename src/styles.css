@@ -144,7 +144,7 @@ textarea {
 
 .topbar {
   display: grid;
-  grid-template-columns: 44px minmax(430px, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   padding: 0 18px;
@@ -176,8 +176,15 @@ textarea {
   gap: 6px;
 }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .topbar-actions button,
-.topbar-library,
+.topbar-settings,
 .button-row button,
 .panel-heading button,
 .field-designer-header button {
@@ -190,6 +197,20 @@ textarea {
   white-space: nowrap;
 }
 
+.topbar-settings {
+  min-width: 78px;
+}
+
+.language-picker {
+  display: block;
+  width: 170px;
+}
+
+.language-picker select {
+  height: 36px;
+  padding: 0 10px;
+}
+
 .topbar-actions button:first-child {
   border-color: var(--accent);
   color: #fff;
@@ -199,10 +220,6 @@ textarea {
 .topbar-actions button:first-child:hover:not(:disabled) {
   border-color: var(--accent-dark);
   background: var(--accent-dark);
-}
-
-.topbar-library {
-  min-width: 160px;
 }
 
 .app-body {
@@ -220,7 +237,7 @@ textarea {
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   border-right: 1px solid var(--line);
   background: rgba(250, 252, 253, 0.78);
   overflow: hidden;
@@ -406,41 +423,6 @@ textarea {
   margin: 6px 10px;
   color: var(--quiet);
   font-size: 13px;
-}
-
-.library-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px;
-  align-items: center;
-  gap: 10px;
-  margin: auto 10px 12px;
-  padding: 12px;
-  border-top: 1px solid var(--line);
-}
-
-.library-card span {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.library-card strong {
-  display: block;
-  overflow: hidden;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.library-card button {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  padding: 0;
 }
 
 .list-pane {
@@ -733,6 +715,13 @@ textarea {
 .preview-panel,
 .markdown-template-panel {
   background: #fcfdfd;
+}
+
+.fullscreen-preview {
+  position: fixed;
+  z-index: 30;
+  inset: 14px;
+  overflow: auto;
 }
 
 .panel-heading {
@@ -1488,14 +1477,9 @@ textarea {
   }
 
   .topbar {
-    grid-template-columns: 44px minmax(430px, 1fr) auto;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
     min-height: 0;
     align-content: normal;
-  }
-
-  .topbar-library {
-    grid-column: auto;
-    justify-self: auto;
   }
 
   .app-shell {

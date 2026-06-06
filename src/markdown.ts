@@ -51,7 +51,7 @@ export function renderMarkdownTemplate(
 
     const field = byId.get(normalized) ?? byLabel.get(normalized);
     if (!field) return "";
-    return formatValue(field, entry.values[field.id]);
+    return formatValue(field, entry.values[field.id], entry);
   });
 }
 
@@ -62,24 +62,30 @@ export function formatDate(value: string) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-function formatValue(field: FieldDefinition, value: unknown) {
+function formatValue(field: FieldDefinition, value: unknown, entry: KnowledgeEntry) {
   if (field.type === "parameterTable") return formatParameterTable(value);
   if (field.type === "tags" || field.type === "multiselect") {
     return Array.isArray(value) ? value.filter(Boolean).join("，") : "";
   }
-  if (field.type === "image") return formatImage(field.label, value);
-  if (field.type === "frameSequence") return formatFrameSequence(field.label, value);
+  if (field.type === "image") return formatImage(field.label, value, entry);
+  if (field.type === "frameSequence") {
+    return formatFrameSequence(field.label, value, entry);
+  }
   if (field.type === "boolean") return value ? "是" : "否";
   if (value === null || value === undefined) return "";
   return String(value);
 }
 
-function formatImage(label: string, value: unknown) {
+function formatImage(label: string, value: unknown, entry: KnowledgeEntry) {
   if (typeof value !== "string" || !value) return "";
-  return `![${escapeImageAlt(label)}](${markdownAssetPath(value)})`;
+  return `![${escapeImageAlt(label)}](${markdownAssetPath(value, entry)})`;
 }
 
-function formatFrameSequence(label: string, value: unknown) {
+function formatFrameSequence(
+  label: string,
+  value: unknown,
+  entry: KnowledgeEntry,
+) {
   const frames = Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && Boolean(item))
     : [];
@@ -87,15 +93,22 @@ function formatFrameSequence(label: string, value: unknown) {
   return frames
     .map(
       (frame, index) =>
-        `![${escapeImageAlt(`${label} ${index + 1}`)}](${markdownAssetPath(frame)})`,
+        `![${escapeImageAlt(`${label} ${index + 1}`)}](${markdownAssetPath(
+          frame,
+          entry,
+        )})`,
     )
     .join("\n\n");
 }
 
-function markdownAssetPath(value: string) {
+function markdownAssetPath(value: string, entry: KnowledgeEntry) {
   if (/^(data:|blob:|https?:)/.test(value)) return value;
   const normalized = value.replace(/\\/g, "/");
-  return normalized.startsWith("assets/") ? `../${normalized}` : normalized;
+  const entryPrefix = `entries/${entry.templateId}/${entry.id}/`;
+  if (normalized.startsWith(entryPrefix)) {
+    return normalized.slice(entryPrefix.length);
+  }
+  return normalized.startsWith("assets/") ? `../../../${normalized}` : normalized;
 }
 
 function escapeImageAlt(value: string) {

@@ -62,6 +62,7 @@ export async function importTemplateIcon(
 
 export async function importEntryImages(
   libraryDir: string,
+  templateId: string,
   entryId: string,
   fieldId: string,
   multiple: boolean,
@@ -89,6 +90,7 @@ export async function importEntryImages(
       fieldId,
       libraryDir,
       sourcePaths,
+      templateId,
     });
   }
 
@@ -234,6 +236,7 @@ export async function deleteEntry(
 
 export async function exportEntryMarkdown(
   libraryDir: string,
+  templateId: string,
   entryId: string,
   fileName: string,
   markdown: string,
@@ -241,6 +244,7 @@ export async function exportEntryMarkdown(
   if (isTauri()) {
     return invoke<string>("export_entry_markdown", {
       libraryDir,
+      templateId,
       entryId,
       fileName,
       markdown,

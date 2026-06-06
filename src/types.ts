@@ -1,3 +1,5 @@
+import type { LanguageCode } from "./i18n";
+
 export type FieldType =
   | "text"
   | "textarea"
@@ -35,8 +37,16 @@ export interface KnowledgeTemplate {
   color: string;
   fields: FieldDefinition[];
   markdownTemplate: string;
+  translations?: Partial<Record<LanguageCode, KnowledgeTemplateTranslation>>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface KnowledgeTemplateTranslation {
+  name?: string;
+  description?: string;
+  fields?: FieldDefinition[];
+  markdownTemplate?: string;
 }
 
 export interface ParameterRow {
@@ -52,8 +62,14 @@ export interface KnowledgeEntry {
   templateId: string;
   title: string;
   values: Record<string, unknown>;
+  translations?: Partial<Record<LanguageCode, KnowledgeEntryTranslation>>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface KnowledgeEntryTranslation {
+  title?: string;
+  values?: Record<string, unknown>;
 }
 
 export interface LibraryState {
@@ -64,4 +80,6 @@ export interface LibraryState {
 
 export interface AppSettings {
   libraryDir?: string;
+  displayLanguage?: LanguageCode;
+  fallbackLanguage?: LanguageCode;
 }

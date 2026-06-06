@@ -24,7 +24,9 @@ import {
   Layers,
   LayoutTemplate,
   ListTree,
+  Maximize2,
   Menu,
+  Minimize2,
   Pause,
   Plus,
   Play,
@@ -59,6 +61,20 @@ import {
 } from "./api";
 import { defaultTemplates } from "./defaultTemplates";
 import {
+  defaultLanguage,
+  languageName,
+  normalizeLanguage,
+  supportedLanguages,
+  type LanguageCode,
+} from "./i18n";
+import {
+  localizeEntry,
+  localizeTemplate,
+  mergeTemplateLanguage,
+  updateEntryLanguageTitle,
+  updateEntryLanguageValue,
+} from "./localization";
+import {
   defaultValueForField,
   entryTitle,
   formatDate,
@@ -75,7 +91,7 @@ import type {
 } from "./types";
 
 type PanelMode = "entry" | "template";
-type SettingsTab = "library" | "layout" | "about";
+type SettingsTab = "library" | "language" | "layout" | "about";
 type Status = { tone: "ok" | "warn"; text: string } | undefined;
 
 const fieldTypeLabels: Record<FieldType, string> = {
@@ -215,38 +231,83 @@ function entryGroup(entry: KnowledgeEntry) {
 }
 
 function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
+  const translations = template.translations
+    ? Object.fromEntries(
+        Object.entries(template.translations).map(([language, translation]) => [
+          language,
+          translation
+            ? {
+                ...translation,
+                fields: translation.fields?.map(normalizeField),
+                markdownTemplate:
+                  translation.markdownTemplate === undefined
+                    ? undefined
+                    : normalizeMarkdownTemplate(translation.markdownTemplate),
+              }
+            : translation,
+        ]),
+      )
+    : undefined;
   return {
     ...template,
     color: template.color || "#0f7c80",
     description: template.description ?? "",
     icon: templateIconName(template),
-    fields: template.fields.map((field) =>
-      field.id === "category"
-        ? {
-            ...field,
-            id: "group",
-            label: "分组",
-            type: "text",
-            required: false,
-            options: undefined,
-            placeholder: field.placeholder || "输入分组",
-          }
-        : field,
-    ),
-    markdownTemplate: template.markdownTemplate
-      .replace(/分类：\{\{\s*category\s*\}\}/g, "分组：{{group}}")
-      .replace(/\{\{\s*category\s*\}\}/g, "{{group}}"),
+    fields: template.fields.map(normalizeField),
+    translations: translations as KnowledgeTemplate["translations"],
+    markdownTemplate: normalizeMarkdownTemplate(template.markdownTemplate),
   };
 }
 
+function normalizeField(field: FieldDefinition): FieldDefinition {
+  return field.id === "category"
+    ? {
+        ...field,
+        id: "group",
+        label: "分组",
+        type: "text",
+        required: false,
+        options: undefined,
+        placeholder: field.placeholder || "输入分组",
+      }
+    : field;
+}
+
+function normalizeMarkdownTemplate(markdownTemplate: string) {
+  return markdownTemplate
+      .replace(/分类：\{\{\s*category\s*\}\}/g, "分组：{{group}}")
+      .replace(/\{\{\s*category\s*\}\}/g, "{{group}}");
+}
+
 function normalizeEntry(entry: KnowledgeEntry): KnowledgeEntry {
-  if (entry.values.group !== undefined || entry.values.category === undefined) {
-    return entry;
-  }
+  const values = normalizeEntryValues(entry.values);
+  const translations = entry.translations
+    ? Object.fromEntries(
+        Object.entries(entry.translations).map(([language, translation]) => [
+          language,
+          translation
+            ? {
+                ...translation,
+                values: translation.values
+                  ? normalizeEntryValues(translation.values)
+                  : translation.values,
+              }
+            : translation,
+        ]),
+      )
+    : undefined;
   return {
     ...entry,
-    values: { ...entry.values, group: entry.values.category },
+    values,
+    translations: translations as KnowledgeEntry["translations"],
   };
+}
+
+function normalizeEntryValues(values: Record<string, unknown>) {
+  if (values.group !== undefined || values.category === undefined) {
+    return values;
+  }
+  return { ...values, group: values.category };
 }
 
 export default function App() {
@@ -265,11 +326,17 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("library");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [iconSources, setIconSources] = useState<Record<string, string>>({});
+  const [currentLanguage, setCurrentLanguage] =
+    useState<LanguageCode>(defaultLanguage);
+  const [fallbackLanguage, setFallbackLanguage] =
+    useState<LanguageCode>(defaultLanguage);
 
   useEffect(() => {
     void (async () => {
       try {
         const settings = await getSettings();
+        setCurrentLanguage(normalizeLanguage(settings.displayLanguage));
+        setFallbackLanguage(normalizeLanguage(settings.fallbackLanguage));
         if (settings.libraryDir) {
           setLibraryDir(settings.libraryDir);
           await refreshLibrary(settings.libraryDir);
@@ -288,24 +355,45 @@ export default function App() {
     return () => document.removeEventListener("contextmenu", preventContextMenu);
   }, []);
 
-  const selectedTemplate = useMemo(
+  const selectedBaseTemplate = useMemo(
     () =>
       templates.find((template) => template.id === selectedTemplateId) ??
       templates[0],
     [selectedTemplateId, templates],
   );
 
-  const selectedEntry = useMemo(
+  const selectedTemplate = useMemo(
+    () =>
+      selectedBaseTemplate
+        ? localizeTemplate(selectedBaseTemplate, currentLanguage, fallbackLanguage)
+        : undefined,
+    [currentLanguage, fallbackLanguage, selectedBaseTemplate],
+  );
+
+  const localizedEntries = useMemo(
+    () =>
+      entries.map((entry) =>
+        localizeEntry(entry, currentLanguage, fallbackLanguage),
+      ),
+    [currentLanguage, entries, fallbackLanguage],
+  );
+
+  const selectedBaseEntry = useMemo(
     () => entries.find((entry) => entry.id === selectedEntryId),
     [entries, selectedEntryId],
+  );
+
+  const selectedEntry = useMemo(
+    () => localizedEntries.find((entry) => entry.id === selectedEntryId),
+    [localizedEntries, selectedEntryId],
   );
 
   const templateEntries = useMemo(
     () =>
       selectedTemplate
-        ? entries.filter((entry) => entry.templateId === selectedTemplate.id)
+        ? localizedEntries.filter((entry) => entry.templateId === selectedTemplate.id)
         : [],
-    [entries, selectedTemplate],
+    [localizedEntries, selectedTemplate],
   );
 
   const filteredEntries = useMemo(() => {
@@ -421,6 +509,29 @@ export default function App() {
     setSettingsOpen(true);
   }
 
+  async function persistSettings(patch: Partial<{
+    libraryDir: string;
+    displayLanguage: LanguageCode;
+    fallbackLanguage: LanguageCode;
+  }>) {
+    await saveSettings({
+      libraryDir,
+      displayLanguage: currentLanguage,
+      fallbackLanguage,
+      ...patch,
+    });
+  }
+
+  async function handleChangeLanguage(language: LanguageCode) {
+    setCurrentLanguage(language);
+    await persistSettings({ displayLanguage: language });
+  }
+
+  async function handleChangeFallbackLanguage(language: LanguageCode) {
+    setFallbackLanguage(language);
+    await persistSettings({ fallbackLanguage: language });
+  }
+
   function iconSrcForTemplate(template?: KnowledgeTemplate) {
     if (!template?.iconImage) return "";
     if (/^(data:|blob:|https?:)/.test(template.iconImage)) {
@@ -432,7 +543,7 @@ export default function App() {
   async function handleChooseLibrary() {
     const selected = await chooseLibraryDirectory();
     if (!selected) return;
-    await saveSettings({ libraryDir: selected });
+    await persistSettings({ libraryDir: selected });
     setLibraryDir(selected);
     await refreshLibrary(selected);
     setStatus({ tone: "ok", text: "资料库目录已设置。" });
@@ -453,6 +564,12 @@ export default function App() {
       templateId: selectedTemplate.id,
       title: "未命名知识",
       values,
+      translations: {
+        [currentLanguage]: {
+          title: "未命名知识",
+          values,
+        },
+      },
       createdAt,
       updatedAt: createdAt,
     };
@@ -464,7 +581,7 @@ export default function App() {
   }
 
   async function handleSaveEntry() {
-    if (!libraryDir || !selectedTemplate || !selectedEntry) return;
+    if (!libraryDir || !selectedTemplate || !selectedEntry || !selectedBaseEntry) return;
     const missing = selectedTemplate.fields.filter((field) =>
       requiredMissing(field, selectedEntry.values[field.id]),
     );
@@ -476,8 +593,12 @@ export default function App() {
       return;
     }
     const next = {
-      ...selectedEntry,
-      title: entryTitle(selectedTemplate, selectedEntry),
+      ...updateEntryLanguageTitle(
+        selectedBaseEntry,
+        currentLanguage,
+        fallbackLanguage,
+        entryTitle(selectedTemplate, selectedEntry),
+      ),
       updatedAt: nowIso(),
     };
     await saveEntry(libraryDir, next);
@@ -508,6 +629,7 @@ export default function App() {
     const fileName = safeFileName(entryTitle(selectedTemplate, selectedEntry));
     const exportedPath = await exportEntryMarkdown(
       libraryDir,
+      selectedEntry.templateId,
       selectedEntry.id,
       fileName,
       previewMarkdown,
@@ -516,11 +638,17 @@ export default function App() {
   }
 
   function updateEntryValue(fieldId: string, value: unknown) {
-    if (!selectedEntry) return;
+    if (!selectedBaseEntry) return;
     setEntries((current) =>
       current.map((entry) =>
-        entry.id === selectedEntry.id
-          ? { ...entry, values: { ...entry.values, [fieldId]: value } }
+        entry.id === selectedBaseEntry.id
+          ? updateEntryLanguageValue(
+              entry,
+              currentLanguage,
+              fallbackLanguage,
+              fieldId,
+              value,
+            )
           : entry,
       ),
     );
@@ -587,11 +715,14 @@ export default function App() {
       setStatus({ tone: "warn", text: `字段 ID 重复：${duplicate}` });
       return;
     }
-    const next = {
+    const baseTemplate =
+      templates.find((template) => template.id === draftTemplate.id) ??
+      draftTemplate;
+    const next = mergeTemplateLanguage(baseTemplate, {
       ...draftTemplate,
       icon: templateIconName(draftTemplate),
       updatedAt: nowIso(),
-    };
+    }, currentLanguage);
     await saveTemplate(libraryDir, next);
     setTemplates((current) => {
       const exists = current.some((template) => template.id === next.id);
@@ -746,29 +877,18 @@ export default function App() {
           </button>
         </div>
 
-        <div className="topbar-actions">
-          <button onClick={handleNewEntry} disabled={!hasLibrary}>
-            <FilePlus2 size={18} />
-            新建
-          </button>
-          <button onClick={handleSaveEntry} disabled={!selectedEntry}>
-            <Save size={18} />
-            保存
-          </button>
-          <button onClick={handleExportEntry} disabled={!selectedEntry}>
-            <Download size={18} />
-            导出 MD
-          </button>
-          <button onClick={() => setMode("template")}>
-            <LayoutTemplate size={18} />
-            类型设置
+        <div />
+
+        <div className="topbar-right">
+          <LanguageSelect
+            value={currentLanguage}
+            onChange={(language) => void handleChangeLanguage(language)}
+          />
+          <button className="topbar-settings" onClick={() => openSettings("library")} title="设置">
+            <Settings size={18} />
+            设置
           </button>
         </div>
-
-        <button className="topbar-library" onClick={() => openSettings("library")}>
-          <FolderOpen size={18} />
-          设置资料库目录
-        </button>
       </header>
 
       <div className={`app-body ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -787,33 +907,40 @@ export default function App() {
               新增类型
             </button>
           </div>
-          {templates.map((template) => (
-            <button
-              className={`type-button ${
-                selectedTemplate?.id === template.id ? "active" : ""
-              }`}
-              key={template.id}
-              onClick={() => {
-                setSelectedTemplateId(template.id);
-                setSelectedEntryId(
-                  entries.find((entry) => entry.templateId === template.id)
-                    ?.id ?? "",
-                );
-                setMode("entry");
-              }}
-            >
-              <span className="type-icon" style={{ color: template.color }}>
-                <TemplateIcon src={iconSrcForTemplate(template)} template={template} />
-              </span>
-              <span className="type-text">
-                <span className="type-name">{template.name}</span>
-                {template.description && (
-                  <small>{template.description}</small>
-                )}
-              </span>
-              <em>{entries.filter((entry) => entry.templateId === template.id).length}</em>
-            </button>
-          ))}
+          {templates.map((template) => {
+            const visibleTemplate = localizeTemplate(
+              template,
+              currentLanguage,
+              fallbackLanguage,
+            );
+            return (
+              <button
+                className={`type-button ${
+                  selectedTemplate?.id === template.id ? "active" : ""
+                }`}
+                key={template.id}
+                onClick={() => {
+                  setSelectedTemplateId(template.id);
+                  setSelectedEntryId(
+                    entries.find((entry) => entry.templateId === template.id)
+                      ?.id ?? "",
+                  );
+                  setMode("entry");
+                }}
+              >
+                <span className="type-icon" style={{ color: template.color }}>
+                  <TemplateIcon src={iconSrcForTemplate(template)} template={template} />
+                </span>
+                <span className="type-text">
+                  <span className="type-name">{visibleTemplate.name}</span>
+                  {visibleTemplate.description && (
+                    <small>{visibleTemplate.description}</small>
+                  )}
+                </span>
+                <em>{entries.filter((entry) => entry.templateId === template.id).length}</em>
+              </button>
+            );
+          })}
         </section>
 
         <section className="sidebar-section groups">
@@ -848,15 +975,6 @@ export default function App() {
         </section>
         </div>
 
-        <div className="library-card">
-          <div>
-            <span>资料库</span>
-            <strong>{libraryDir || "未选择"}</strong>
-          </div>
-          <button onClick={() => openSettings("library")} title="设置资料库目录">
-            <Settings size={18} />
-          </button>
-        </div>
       </aside>
 
       <section className="list-pane">
@@ -983,6 +1101,8 @@ export default function App() {
             libraryDir={libraryDir}
             markdown={previewMarkdown}
             onDelete={handleDeleteEntry}
+            onExport={handleExportEntry}
+            onSave={handleSaveEntry}
             onStatus={setStatus}
             onUpdateValue={updateEntryValue}
             template={selectedTemplate}
@@ -992,9 +1112,13 @@ export default function App() {
       </div>
       <SettingsDialog
         activeTab={settingsTab}
+        fallbackLanguage={fallbackLanguage}
         libraryDir={libraryDir}
         open={settingsOpen}
         sidebarCollapsed={sidebarCollapsed}
+        onChangeFallbackLanguage={(language) =>
+          void handleChangeFallbackLanguage(language)
+        }
         onChooseLibrary={handleChooseLibrary}
         onClose={() => setSettingsOpen(false)}
         onSelectTab={setSettingsTab}
@@ -1006,7 +1130,9 @@ export default function App() {
 
 function SettingsDialog({
   activeTab,
+  fallbackLanguage,
   libraryDir,
+  onChangeFallbackLanguage,
   onChooseLibrary,
   onClose,
   onSelectTab,
@@ -1015,7 +1141,9 @@ function SettingsDialog({
   sidebarCollapsed,
 }: {
   activeTab: SettingsTab;
+  fallbackLanguage: LanguageCode;
   libraryDir: string;
+  onChangeFallbackLanguage: (language: LanguageCode) => void;
   onChooseLibrary: () => Promise<void>;
   onClose: () => void;
   onSelectTab: (tab: SettingsTab) => void;
@@ -1051,6 +1179,13 @@ function SettingsDialog({
             >
               <FolderOpen size={17} />
               资料库
+            </button>
+            <button
+              className={activeTab === "language" ? "active" : ""}
+              onClick={() => onSelectTab("language")}
+            >
+              <BookOpen size={17} />
+              语言
             </button>
             <button
               className={activeTab === "layout" ? "active" : ""}
@@ -1090,6 +1225,24 @@ function SettingsDialog({
               </div>
             )}
 
+            {activeTab === "language" && (
+              <div className="settings-page">
+                <div className="setting-row">
+                  <div>
+                    <span>默认回退语言</span>
+                    <strong>{languageName(fallbackLanguage)}</strong>
+                  </div>
+                  <LanguageSelect
+                    value={fallbackLanguage}
+                    onChange={onChangeFallbackLanguage}
+                  />
+                </div>
+                <div className="setting-note">
+                  当前语言没有对应内容时，会自动显示这个语言的数据。
+                </div>
+              </div>
+            )}
+
             {activeTab === "layout" && (
               <div className="settings-page">
                 <div className="setting-row">
@@ -1118,11 +1271,39 @@ function SettingsDialog({
   );
 }
 
+function LanguageSelect({
+  onChange,
+  value,
+}: {
+  onChange: (language: LanguageCode) => void;
+  value: LanguageCode;
+}) {
+  return (
+    <label className="language-picker">
+      <select
+        aria-label="当前语言"
+        value={value}
+        onChange={(event) =>
+          onChange(normalizeLanguage(event.target.value))
+        }
+      >
+        {supportedLanguages.map((language) => (
+          <option key={language.code} value={language.code}>
+            {language.flag} {language.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function EntryEditor({
   entry,
   libraryDir,
   markdown,
   onDelete,
+  onExport,
+  onSave,
   onStatus,
   onUpdateValue,
   template,
@@ -1131,10 +1312,14 @@ function EntryEditor({
   libraryDir: string;
   markdown: string;
   onDelete: () => void;
+  onExport: () => void;
+  onSave: () => void;
   onStatus: (status: Status) => void;
   onUpdateValue: (fieldId: string, value: unknown) => void;
   template?: KnowledgeTemplate;
 }) {
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
+
   if (!template || !entry) {
     return (
       <div className="workspace-empty">
@@ -1153,10 +1338,16 @@ function EntryEditor({
             <span>结构化内容</span>
             <strong>{template.name}</strong>
           </div>
-          <button className="danger-ghost" onClick={onDelete}>
-            <Trash2 size={16} />
-            删除
-          </button>
+          <div className="button-row">
+            <button onClick={onSave}>
+              <Save size={16} />
+              保存
+            </button>
+            <button className="danger-ghost" onClick={onDelete}>
+              <Trash2 size={16} />
+              删除
+            </button>
+          </div>
         </div>
         <div className="field-stack">
           {template.fields.map((field) => (
@@ -1165,6 +1356,7 @@ function EntryEditor({
               field={field}
               key={field.id}
               libraryDir={libraryDir}
+              templateId={entry.templateId}
               value={entry.values[field.id]}
               onStatus={onStatus}
               onChange={(value) => onUpdateValue(field.id, value)}
@@ -1173,19 +1365,86 @@ function EntryEditor({
         </div>
       </div>
 
-      <div className="preview-panel">
+      <div className={`preview-panel ${previewFullscreen ? "fullscreen-preview" : ""}`}>
         <div className="panel-heading">
           <div>
             <span>Markdown 预览</span>
             <strong>{entryTitle(template, entry)}</strong>
           </div>
+          <div className="button-row">
+            <button onClick={onExport}>
+              <Download size={16} />
+              导出 MD
+            </button>
+            <button onClick={() => setPreviewFullscreen((current) => !current)}>
+              {previewFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              {previewFullscreen ? "退出全屏" : "全屏显示"}
+            </button>
+          </div>
         </div>
         <article className="markdown-preview">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+          <ReactMarkdown
+            components={{
+              img: ({ alt, src }) => (
+                <MarkdownPreviewImage
+                  alt={alt ?? ""}
+                  entry={entry}
+                  libraryDir={libraryDir}
+                  src={src}
+                />
+              ),
+            }}
+            remarkPlugins={[remarkGfm]}
+          >
+            {markdown}
+          </ReactMarkdown>
         </article>
       </div>
     </div>
   );
+}
+
+function MarkdownPreviewImage({
+  alt,
+  entry,
+  libraryDir,
+  src,
+}: {
+  alt: string;
+  entry: KnowledgeEntry;
+  libraryDir: string;
+  src?: string;
+}) {
+  const [imageSrc, setImageSrc] = useState(src ?? "");
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!src) {
+        setImageSrc("");
+        return;
+      }
+      if (/^(data:|blob:|https?:)/.test(src)) {
+        setImageSrc(src);
+        return;
+      }
+      const normalized = src.replace(/\\/g, "/");
+      const assetPath = normalized.startsWith("assets/")
+        ? `entries/${entry.templateId}/${entry.id}/${normalized}`
+        : normalized.replace(/^(\.\.\/)+/, "");
+      try {
+        const loaded = await loadLibraryAsset(libraryDir, assetPath);
+        if (!cancelled) setImageSrc(loaded);
+      } catch {
+        if (!cancelled) setImageSrc(src);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [entry.id, entry.templateId, libraryDir, src]);
+
+  return imageSrc ? <img alt={alt} src={imageSrc} /> : null;
 }
 
 function FieldInput({
@@ -1194,6 +1453,7 @@ function FieldInput({
   libraryDir,
   onChange,
   onStatus,
+  templateId,
   value,
 }: {
   entryId: string;
@@ -1201,6 +1461,7 @@ function FieldInput({
   libraryDir: string;
   onChange: (value: unknown) => void;
   onStatus: (status: Status) => void;
+  templateId: string;
   value: unknown;
 }) {
   const missing = requiredMissing(field, value);
@@ -1326,6 +1587,7 @@ function FieldInput({
         libraryDir={libraryDir}
         onChange={onChange}
         onStatus={onStatus}
+        templateId={templateId}
         value={typeof value === "string" ? value : ""}
       />
     );
@@ -1340,6 +1602,7 @@ function FieldInput({
         libraryDir={libraryDir}
         onChange={onChange}
         onStatus={onStatus}
+        templateId={templateId}
         value={
           Array.isArray(value)
             ? value.filter((item): item is string => typeof item === "string")
@@ -1373,6 +1636,7 @@ function ImageFieldInput({
   libraryDir,
   onChange,
   onStatus,
+  templateId,
   value,
 }: {
   entryId: string;
@@ -1381,6 +1645,7 @@ function ImageFieldInput({
   libraryDir: string;
   onChange: (value: string) => void;
   onStatus: (status: Status) => void;
+  templateId: string;
   value: string;
 }) {
   const [source, setSource] = useState("");
@@ -1406,7 +1671,13 @@ function ImageFieldInput({
 
   async function handleUpload() {
     try {
-      const imported = await importEntryImages(libraryDir, entryId, field.id, false);
+      const imported = await importEntryImages(
+        libraryDir,
+        templateId,
+        entryId,
+        field.id,
+        false,
+      );
       if (!imported[0]) return;
       onChange(imported[0]);
       onStatus({ tone: "ok", text: "图片已导入。" });
@@ -1451,6 +1722,7 @@ function FrameSequenceInput({
   libraryDir,
   onChange,
   onStatus,
+  templateId,
   value,
 }: {
   entryId: string;
@@ -1459,6 +1731,7 @@ function FrameSequenceInput({
   libraryDir: string;
   onChange: (value: string[]) => void;
   onStatus: (status: Status) => void;
+  templateId: string;
   value: string[];
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -1501,7 +1774,13 @@ function FrameSequenceInput({
 
   async function handleUpload() {
     try {
-      const imported = await importEntryImages(libraryDir, entryId, field.id, true);
+      const imported = await importEntryImages(
+        libraryDir,
+        templateId,
+        entryId,
+        field.id,
+        true,
+      );
       if (!imported.length) return;
       onChange([...value, ...imported]);
       setCurrentIndex(value.length);

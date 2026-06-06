@@ -12,6 +12,8 @@ use std::{
 #[serde(rename_all = "camelCase")]
 struct AppSettings {
     library_dir: Option<String>,
+    display_language: Option<String>,
+    fallback_language: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,10 +124,12 @@ fn import_template_icon(
 #[tauri::command]
 fn import_entry_images(
     library_dir: String,
+    template_id: String,
     entry_id: String,
     field_id: String,
     source_paths: Vec<String>,
 ) -> Result<Vec<String>, String> {
+    validate_id(&template_id)?;
     validate_id(&entry_id)?;
     let root = ensure_library(&library_dir)?;
     let field_dir = sanitize_asset_stem(&field_id);
@@ -134,7 +138,7 @@ fn import_entry_images(
     } else {
         field_dir
     };
-    let target_dir = format!("assets/entry-media/{entry_id}/{field_dir}");
+    let target_dir = format!("entries/{template_id}/{entry_id}/assets/{field_dir}");
     let mut imported = Vec::with_capacity(source_paths.len());
     for (index, source_path) in source_paths.iter().enumerate() {
         imported.push(import_image_asset(
@@ -169,9 +173,17 @@ fn save_entry(library_dir: String, entry: Value) -> Result<(), String> {
     let template_id = required_json_string(&entry, "templateId")?;
     validate_id(&id)?;
     validate_id(&template_id)?;
-    let dir = root.join("entries").join(&template_id);
+    let dir = root.join("entries").join(&template_id).join(&id);
     fs::create_dir_all(&dir).map_err(|error| format!("Failed to create {:?}: {error}", dir))?;
-    write_json(&dir.join(format!("{id}.json")), &entry)?;
+    write_json(&dir.join("entry.json"), &entry)?;
+    let legacy_path = root
+        .join("entries")
+        .join(&template_id)
+        .join(format!("{id}.json"));
+    if legacy_path.exists() {
+        fs::remove_file(&legacy_path)
+            .map_err(|error| format!("Failed to delete {:?}: {error}", legacy_path))?;
+    }
     mark_library_initialized(&root)
 }
 
@@ -180,6 +192,11 @@ fn delete_entry(library_dir: String, template_id: String, entry_id: String) -> R
     validate_id(&template_id)?;
     validate_id(&entry_id)?;
     let root = ensure_library(&library_dir)?;
+    let folder = root.join("entries").join(&template_id).join(&entry_id);
+    if folder.exists() {
+        fs::remove_dir_all(&folder)
+            .map_err(|error| format!("Failed to delete {:?}: {error}", folder))?;
+    }
     let path = root
         .join("entries")
         .join(template_id)
@@ -193,16 +210,19 @@ fn delete_entry(library_dir: String, template_id: String, entry_id: String) -> R
 #[tauri::command]
 fn export_entry_markdown(
     library_dir: String,
+    template_id: String,
     entry_id: String,
     file_name: String,
     markdown: String,
 ) -> Result<String, String> {
+    validate_id(&template_id)?;
+    validate_id(&entry_id)?;
     let root = ensure_library(&library_dir)?;
-    let exports = root.join("exports");
-    fs::create_dir_all(&exports)
-        .map_err(|error| format!("Failed to create {:?}: {error}", exports))?;
+    let entry_dir = root.join("entries").join(template_id).join(&entry_id);
+    fs::create_dir_all(&entry_dir)
+        .map_err(|error| format!("Failed to create {:?}: {error}", entry_dir))?;
     let safe_name = sanitize_file_name(&file_name, &entry_id);
-    let path = exports.join(safe_name);
+    let path = entry_dir.join(safe_name);
     fs::write(&path, markdown).map_err(|error| format!("Failed to write {:?}: {error}", path))?;
     Ok(path.to_string_lossy().to_string())
 }
@@ -392,7 +412,25 @@ fn read_entries(entries_dir: &Path) -> Result<Vec<Value>, String> {
             .map_err(|error| format!("Failed to read entry folder: {error}"))?
             .path();
         if dir.is_dir() {
-            entries.extend(read_json_folder(&dir)?);
+            entries.extend(read_template_entries(&dir)?);
+        }
+    }
+    Ok(entries)
+}
+
+fn read_template_entries(template_dir: &Path) -> Result<Vec<Value>, String> {
+    let mut entries = read_json_folder(template_dir)?;
+    let mut folders = fs::read_dir(template_dir)
+        .map_err(|error| format!("Failed to read {:?}: {error}", template_dir))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    folders.sort();
+    for folder in folders {
+        let entry_path = folder.join("entry.json");
+        if entry_path.exists() {
+            entries.push(read_json(&entry_path)?);
         }
     }
     Ok(entries)
@@ -491,6 +529,7 @@ mod tests {
 
         let exported = export_entry_markdown(
             library_dir.clone(),
+            "tile".to_string(),
             "entry-1".to_string(),
             "攻击_近战_单体.md".to_string(),
             "# 攻击_近战_单体".to_string(),
@@ -514,6 +553,7 @@ mod tests {
         .expect("test frame should be written");
         let frame_assets = import_entry_images(
             library_dir.clone(),
+            "tile".to_string(),
             "entry-1".to_string(),
             "preview".to_string(),
             vec![source_frame.to_string_lossy().to_string()],
@@ -527,10 +567,17 @@ mod tests {
         assert_eq!(loaded.entries.len(), 1);
         assert!(loaded.initialized);
         assert!(PathBuf::from(exported).exists());
+        assert!(root.join("entries").join("tile").join("entry-1").is_dir());
+        assert!(root
+            .join("entries")
+            .join("tile")
+            .join("entry-1")
+            .join("entry.json")
+            .exists());
         assert!(root.join(icon_asset).exists());
         assert!(icon_data_url.starts_with("data:image/png;base64,"));
         assert!(root.join(&frame_assets[0]).exists());
-        assert!(frame_assets[0].starts_with("assets/entry-media/entry-1/preview/"));
+        assert!(frame_assets[0].starts_with("entries/tile/entry-1/assets/preview/"));
         assert!(frame_data_url.starts_with("data:image/svg+xml;base64,"));
 
         fs::remove_dir_all(root).expect("test library should be cleaned");
