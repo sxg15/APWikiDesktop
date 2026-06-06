@@ -6,7 +6,7 @@ export type MarkdownRichImageSegment =
   | { type: "richImage"; alt: string; value: RichImageValue };
 
 const richImageBlockPattern =
-  /^:::\s*(?:ap-rich-image|rich-image|富图片)\s*\r?\n([\s\S]*?)\r?\n:::\s*$/gm;
+  /^[ \t]*:::\s*(?:ap-rich-image|rich-image|富图片)\s*\r?\n([\s\S]*?)\r?\n[ \t]*:::\s*$/gm;
 
 export function parseRichImageMarkdown(markdown: string) {
   const segments: MarkdownRichImageSegment[] = [];
@@ -38,7 +38,7 @@ export function parseRichImageMarkdown(markdown: string) {
 
 function parseRichImageBlock(value: string): MarkdownRichImageSegment | undefined {
   try {
-    const parsed = JSON.parse(value.trim()) as { alt?: unknown };
+    const parsed = JSON.parse(stripCodeFence(value.trim())) as { alt?: unknown };
     const richImage = normalizeRichImageValue(parsed);
     if (!richImage.frames.length) return undefined;
     return {
@@ -49,4 +49,11 @@ function parseRichImageBlock(value: string): MarkdownRichImageSegment | undefine
   } catch {
     return undefined;
   }
+}
+
+function stripCodeFence(value: string) {
+  return value
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 }

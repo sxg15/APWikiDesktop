@@ -514,7 +514,7 @@ function normalizeMarkdownTemplate(markdownTemplate: string) {
 }
 
 function normalizeEntry(entry: KnowledgeEntry, template?: KnowledgeTemplate): KnowledgeEntry {
-  const values = normalizeEntryValues(entry.values);
+  const values = normalizeEntryValues(entry.values, template);
   const translations = entry.translations
     ? Object.fromEntries(
         Object.entries(entry.translations).map(([language, translation]) => [
@@ -523,7 +523,7 @@ function normalizeEntry(entry: KnowledgeEntry, template?: KnowledgeTemplate): Kn
             ? {
                 ...translation,
                 values: translation.values
-                  ? normalizeEntryValues(translation.values, template)
+                  ? normalizeEntryValues(translation.values, template, false)
                   : translation.values,
               }
             : translation,
@@ -540,6 +540,7 @@ function normalizeEntry(entry: KnowledgeEntry, template?: KnowledgeTemplate): Kn
 function normalizeEntryValues(
   values: Record<string, unknown>,
   template?: KnowledgeTemplate,
+  fillMissingRichImages = true,
 ) {
   const next: Record<string, unknown> =
     values.group !== undefined || values.category === undefined
@@ -547,6 +548,7 @@ function normalizeEntryValues(
       : { ...values, group: values.category };
   for (const field of template?.fields ?? []) {
     if (field.type !== "richImage") continue;
+    if (!fillMissingRichImages && next[field.id] === undefined) continue;
     next[field.id] = normalizeRichImageValue(next[field.id]);
   }
   return next;
@@ -622,11 +624,20 @@ export default function App() {
   );
 
   const localizedEntries = useMemo(
-    () =>
-      entries.map((entry) =>
-        localizeEntry(entry, currentLanguage, fallbackLanguage),
-      ),
-    [currentLanguage, entries, fallbackLanguage],
+    () => {
+      const templateById = new Map(
+        templates.map((template) => [template.id, template]),
+      );
+      return entries.map((entry) =>
+        localizeEntry(
+          entry,
+          currentLanguage,
+          fallbackLanguage,
+          templateById.get(entry.templateId),
+        ),
+      );
+    },
+    [currentLanguage, entries, fallbackLanguage, templates],
   );
 
   const selectedBaseEntry = useMemo(
@@ -2233,11 +2244,16 @@ function MarkdownRichImage({
 
 function resolveMarkdownAssetPath(src: string, entry: KnowledgeEntry) {
   if (/^(data:|blob:|https?:)/.test(src)) return src;
-  const normalized = src.replace(/\\/g, "/");
+  const normalized = src.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
+  const withoutParentPrefix = normalized.replace(/^(\.\.\/)+/, "");
+  if (withoutParentPrefix.startsWith("entries/")) return withoutParentPrefix;
+  if (withoutParentPrefix.startsWith("assets/")) {
+    return `entries/${entry.templateId}/${entry.id}/${withoutParentPrefix}`;
+  }
   if (normalized.startsWith("assets/")) {
     return `entries/${entry.templateId}/${entry.id}/${normalized}`;
   }
-  return normalized.replace(/^(\.\.\/)+/, "");
+  return withoutParentPrefix;
 }
 
 function FieldInput({

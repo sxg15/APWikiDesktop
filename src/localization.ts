@@ -1,5 +1,7 @@
 import { defaultLanguage, type LanguageCode } from "./i18n";
+import { normalizeRichImageValue, richImageHasFrames } from "./richImage";
 import type {
+  FieldType,
   FieldDefinition,
   KnowledgeEntry,
   KnowledgeEntryTranslation,
@@ -22,7 +24,11 @@ export function localizeTemplate(
     name: selected?.name ?? fallback?.name ?? template.name,
     description:
       selected?.description ?? fallback?.description ?? template.description,
-    fields: cloneFields(selected?.fields ?? fallback?.fields ?? template.fields),
+    fields: localizeFields(
+      template.fields,
+      fallback?.fields,
+      selected?.fields,
+    ),
     markdownTemplate:
       selected?.markdownTemplate ??
       fallback?.markdownTemplate ??
@@ -34,16 +40,25 @@ export function localizeEntry(
   entry: KnowledgeEntry,
   language: LanguageCode,
   fallbackLanguage: LanguageCode,
+  template?: KnowledgeTemplate,
 ): KnowledgeEntry {
   const fallback = entryTranslation(entry, fallbackLanguage);
   const selected =
     language === fallbackLanguage
       ? fallback
       : entryTranslation(entry, language) ?? fallback;
+  const fallbackValues = fallback?.values ?? entry.values;
   return {
     ...entry,
     title: selected?.title ?? fallback?.title ?? entry.title,
-    values: cloneValues(selected?.values ?? fallback?.values ?? entry.values),
+    values: cloneValues(
+      mergeEntryValues(
+        entry.values,
+        fallbackValues,
+        selected?.values,
+        template,
+      ),
+    ),
   };
 }
 
@@ -180,6 +195,55 @@ function mergeSharedFields(
 
 function cloneFields(fields: FieldDefinition[]) {
   return JSON.parse(JSON.stringify(fields)) as FieldDefinition[];
+}
+
+function localizeFields(
+  baseFields: FieldDefinition[],
+  fallbackFields?: FieldDefinition[],
+  selectedFields?: FieldDefinition[],
+) {
+  const fallbackById = new Map(
+    (fallbackFields ?? []).map((field) => [field.id, field]),
+  );
+  const selectedById = new Map(
+    (selectedFields ?? []).map((field) => [field.id, field]),
+  );
+  return baseFields.map((baseField) => ({
+    ...baseField,
+    ...(fallbackById.get(baseField.id) ?? {}),
+    ...(selectedById.get(baseField.id) ?? {}),
+  }));
+}
+
+function mergeEntryValues(
+  baseValues: Record<string, unknown>,
+  fallbackValues: Record<string, unknown>,
+  selectedValues: Record<string, unknown> | undefined,
+  template?: KnowledgeTemplate,
+) {
+  const richImageFieldIds = new Set(
+    (template?.fields ?? [])
+      .filter((field) => isRichImageFieldType(field.type))
+      .map((field) => field.id),
+  );
+  const next = { ...baseValues, ...fallbackValues };
+  for (const [fieldId, value] of Object.entries(selectedValues ?? {})) {
+    if (
+      richImageFieldIds.has(fieldId) &&
+      !richImageHasFrames(value) &&
+      richImageHasFrames(next[fieldId])
+    ) {
+      continue;
+    }
+    next[fieldId] = richImageFieldIds.has(fieldId)
+      ? normalizeRichImageValue(value)
+      : value;
+  }
+  return next;
+}
+
+function isRichImageFieldType(type: FieldType) {
+  return type === "richImage" || type === "image" || type === "frameSequence";
 }
 
 function cloneValues(values: Record<string, unknown>) {

@@ -165,7 +165,7 @@ function markdownAssetPath(value: string, entry: KnowledgeEntry) {
   if (normalized.startsWith(entryPrefix)) {
     return normalized.slice(entryPrefix.length);
   }
-  return normalized.startsWith("assets/") ? `../../../${normalized}` : normalized;
+  return normalized;
 }
 
 function formatParameterTable(value: unknown) {
