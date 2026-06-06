@@ -698,12 +698,28 @@ textarea {
   flex: 1;
   grid-template-columns: minmax(450px, 1fr) minmax(430px, 0.9fr);
   gap: 14px;
-  overflow: auto;
   padding: 14px;
 }
 
+.editor-grid {
+  overflow: hidden;
+}
+
+.template-designer {
+  overflow: auto;
+}
+
 .form-panel,
-.preview-panel,
+.preview-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
 .designer-panel {
   min-width: 0;
   min-height: 0;
@@ -1317,40 +1333,40 @@ textarea {
 
 @media (max-width: 1180px) {
   body {
-    min-width: 760px;
-    overflow: auto;
+    min-width: 980px;
+    overflow: hidden;
   }
 
   .topbar {
-    grid-template-columns: 44px 1fr;
-    min-height: 96px;
-    align-content: center;
+    grid-template-columns: 44px minmax(430px, 1fr) auto;
+    min-height: 0;
+    align-content: normal;
   }
 
   .topbar-library {
-    grid-column: 1 / -1;
-    justify-self: end;
+    grid-column: auto;
+    justify-self: auto;
   }
 
   .app-shell {
-    height: auto;
-    min-height: 100vh;
-    grid-template-rows: auto minmax(0, 1fr);
-    overflow: visible;
+    height: 100vh;
+    min-height: 0;
+    grid-template-rows: 56px minmax(0, 1fr);
+    overflow: hidden;
   }
 
   .app-body {
-    grid-template-columns: minmax(340px, 380px) minmax(260px, 1fr);
+    grid-template-columns: minmax(340px, 360px) 280px minmax(0, 1fr);
   }
 
   .app-body.sidebar-collapsed {
-    grid-template-columns: 0 minmax(260px, 1fr);
+    grid-template-columns: 0 280px minmax(0, 1fr);
   }
 
   .workspace {
-    grid-column: 1 / -1;
-    min-height: 760px;
-    border-top: 1px solid var(--line);
+    grid-column: auto;
+    min-height: 0;
+    border-top: 0;
   }
 
   .settings-content {
