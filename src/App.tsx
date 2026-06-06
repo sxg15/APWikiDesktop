@@ -88,12 +88,16 @@ import type {
   FieldType,
   KnowledgeEntry,
   KnowledgeTemplate,
+  KnowledgeTemplateTranslation,
   ParameterRow,
 } from "./types";
 
 type EntryView = "edit" | "preview";
 type SettingsTab = "library" | "language" | "layout" | "about";
 type Status = { tone: "ok" | "warn"; text: string } | undefined;
+type UnsavedChoice = "cancel" | "save" | "discard";
+type UnsavedScope = "entry" | "template";
+type LanguageEmptyMap = Partial<Record<LanguageCode, boolean>>;
 
 const fieldTypeLabels: Record<FieldType, string> = {
   text: "单行文本",
@@ -248,6 +252,81 @@ function previewMayBeEmpty(template: KnowledgeTemplate, entry: KnowledgeEntry) {
   );
 }
 
+function cloneEntry(entry: KnowledgeEntry) {
+  return JSON.parse(JSON.stringify(entry)) as KnowledgeEntry;
+}
+
+function cloneEntries(entries: KnowledgeEntry[]) {
+  return entries.map(cloneEntry);
+}
+
+function entriesById(entries: KnowledgeEntry[]) {
+  return Object.fromEntries(entries.map((entry) => [entry.id, cloneEntry(entry)]));
+}
+
+function entryValuesForLanguage(entry: KnowledgeEntry, language: LanguageCode) {
+  if (language === defaultLanguage) return entry.values;
+  return entry.translations?.[language]?.values;
+}
+
+function entryLanguageMayBeEmpty(
+  entry: KnowledgeEntry | undefined,
+  language: LanguageCode,
+) {
+  if (!entry) return true;
+  const values = entryValuesForLanguage(entry, language);
+  return !hasMeaningfulValue(values ?? {});
+}
+
+function entryLanguageEmptyMap(entry?: KnowledgeEntry): LanguageEmptyMap {
+  return Object.fromEntries(
+    supportedLanguages.map((language) => [
+      language.code,
+      entryLanguageMayBeEmpty(entry, language.code),
+    ]),
+  ) as LanguageEmptyMap;
+}
+
+function templateTranslationHasContent(
+  template: KnowledgeTemplate | KnowledgeTemplateTranslation | undefined,
+) {
+  if (!template) return false;
+  return hasMeaningfulValue({
+    name: template.name,
+    description: template.description,
+    fields: template.fields?.map((field: FieldDefinition) => ({
+      label: field.label,
+      placeholder: field.placeholder,
+      options: field.options,
+    })),
+    markdownTemplate: template.markdownTemplate,
+  });
+}
+
+function templateLanguageMayBeEmpty(
+  template: KnowledgeTemplate | undefined,
+  language: LanguageCode,
+) {
+  if (!template) return true;
+  if (language === defaultLanguage) return !templateTranslationHasContent(template);
+  return !templateTranslationHasContent(template.translations?.[language]);
+}
+
+function templateLanguageEmptyMap(
+  template?: KnowledgeTemplate,
+  draftTemplate?: KnowledgeTemplate,
+  currentLanguage?: LanguageCode,
+): LanguageEmptyMap {
+  return Object.fromEntries(
+    supportedLanguages.map((language) => [
+      language.code,
+      draftTemplate && currentLanguage === language.code
+        ? !templateTranslationHasContent(draftTemplate)
+        : templateLanguageMayBeEmpty(template, language.code),
+    ]),
+  ) as LanguageEmptyMap;
+}
+
 function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
   const translations = template.translations
     ? Object.fromEntries(
@@ -339,6 +418,14 @@ export default function App() {
   const [selectedGroup, setSelectedGroup] = useState("");
   const [draftTemplate, setDraftTemplate] = useState<KnowledgeTemplate>();
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
+  const [templateDirty, setTemplateDirty] = useState(false);
+  const [savedEntries, setSavedEntries] = useState<Record<string, KnowledgeEntry>>({});
+  const [dirtyEntryIds, setDirtyEntryIds] = useState<Set<string>>(() => new Set());
+  const [unsavedPrompt, setUnsavedPrompt] =
+    useState<{ scope: UnsavedScope } | undefined>(undefined);
+  const unsavedPromptResolver = useRef<
+    ((choice: UnsavedChoice) => void) | undefined
+  >(undefined);
   const [status, setStatus] = useState<Status>();
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -443,10 +530,40 @@ export default function App() {
     return renderMarkdownTemplate(selectedTemplate, selectedEntry);
   }, [selectedEntry, selectedTemplate]);
 
+  const selectedEntryDirty = Boolean(
+    selectedBaseEntry && dirtyEntryIds.has(selectedBaseEntry.id),
+  );
+  const hasUnsavedChanges = templateDirty || dirtyEntryIds.size > 0;
+
+  const selectedEntryLanguageEmpty = useMemo(
+    () => entryLanguageEmptyMap(selectedBaseEntry),
+    [selectedBaseEntry],
+  );
+
+  const selectedTemplateLanguageEmpty = useMemo(
+    () =>
+      templateLanguageEmptyMap(
+        selectedBaseTemplate,
+        templateEditorOpen ? draftTemplate : undefined,
+        currentLanguage,
+      ),
+    [currentLanguage, draftTemplate, selectedBaseTemplate, templateEditorOpen],
+  );
+
   useEffect(() => {
     if (selectedTemplate) setDraftTemplate(cloneTemplate(selectedTemplate));
     setSelectedGroup("");
   }, [selectedTemplate]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventUnload);
+    return () => window.removeEventListener("beforeunload", preventUnload);
+  }, [hasUnsavedChanges]);
 
   useEffect(() => {
     if (selectedGroup && !groups.some(([group]) => group === selectedGroup)) {
@@ -508,6 +625,9 @@ export default function App() {
       );
     setTemplates(nextTemplates);
     setEntries(nextEntries);
+    setSavedEntries(entriesById(nextEntries));
+    setDirtyEntryIds(new Set());
+    setTemplateDirty(false);
     const firstTemplate = nextTemplates[0];
     setSelectedTemplateId((current) =>
       nextTemplates.some((template) => template.id === current)
@@ -542,14 +662,112 @@ export default function App() {
     });
   }
 
-  async function handleChangeLanguage(language: LanguageCode) {
+  function askUnsavedChoice(scope: UnsavedScope) {
+    setUnsavedPrompt({ scope });
+    return new Promise<UnsavedChoice>((resolve) => {
+      unsavedPromptResolver.current = resolve;
+    });
+  }
+
+  function resolveUnsavedPrompt(choice: UnsavedChoice) {
+    unsavedPromptResolver.current?.(choice);
+    unsavedPromptResolver.current = undefined;
+    setUnsavedPrompt(undefined);
+  }
+
+  function markEntryDirty(entryId: string) {
+    setDirtyEntryIds((current) => new Set(current).add(entryId));
+  }
+
+  function clearEntryDirty(entryId: string) {
+    setDirtyEntryIds((current) => {
+      const next = new Set(current);
+      next.delete(entryId);
+      return next;
+    });
+  }
+
+  function discardEntryChanges(entryId: string) {
+    const saved = savedEntries[entryId];
+    if (!saved) return;
+    setEntries((current) =>
+      current
+        .map((entry) => (entry.id === entryId ? cloneEntry(saved) : entry))
+        .sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+        ),
+    );
+    clearEntryDirty(entryId);
+  }
+
+  function discardTemplateChanges() {
+    const existing = draftTemplate
+      ? templates.find((template) => template.id === draftTemplate.id)
+      : undefined;
+    setDraftTemplate(
+      existing
+        ? cloneTemplate(localizeTemplate(existing, currentLanguage, fallbackLanguage))
+        : undefined,
+    );
+    setTemplateDirty(false);
+  }
+
+  async function guardUnsaved(scope: UnsavedScope, action: () => void | Promise<void>) {
+    const dirty =
+      scope === "template" ? templateDirty : Boolean(selectedBaseEntry && selectedEntryDirty);
+    if (!dirty) {
+      await action();
+      return;
+    }
+
+    const choice = await askUnsavedChoice(scope);
+    if (choice === "cancel") return;
+
+    if (choice === "save") {
+      const saved =
+        scope === "template"
+          ? await saveCurrentTemplate()
+          : await saveCurrentEntry();
+      if (!saved) return;
+    } else if (scope === "template") {
+      discardTemplateChanges();
+    } else if (selectedBaseEntry) {
+      discardEntryChanges(selectedBaseEntry.id);
+    }
+
+    await action();
+  }
+
+  async function guardActiveUnsaved(action: () => void | Promise<void>) {
+    if (templateEditorOpen && templateDirty) {
+      await guardUnsaved("template", action);
+      return;
+    }
+    if (selectedEntryDirty) {
+      await guardUnsaved("entry", action);
+      return;
+    }
+    await action();
+  }
+
+  async function changeLanguage(language: LanguageCode) {
+    if (language === currentLanguage) return;
     setCurrentLanguage(language);
     await persistSettings({ displayLanguage: language });
   }
 
+  async function handleChangeLanguage(language: LanguageCode) {
+    if (language === currentLanguage) return;
+    await guardActiveUnsaved(() => changeLanguage(language));
+  }
+
   async function handleChangeFallbackLanguage(language: LanguageCode) {
-    setFallbackLanguage(language);
-    await persistSettings({ fallbackLanguage: language });
+    if (language === fallbackLanguage) return;
+    await guardActiveUnsaved(async () => {
+      setFallbackLanguage(language);
+      await persistSettings({ fallbackLanguage: language });
+    });
   }
 
   function iconSrcForTemplate(template?: KnowledgeTemplate) {
@@ -573,6 +791,7 @@ export default function App() {
     setDraftTemplate(
       cloneTemplate(localizeTemplate(template, currentLanguage, fallbackLanguage)),
     );
+    setTemplateDirty(false);
     setTemplateEditorOpen(true);
   }
 
@@ -611,13 +830,17 @@ export default function App() {
     };
     await saveEntry(libraryDir, entry);
     setEntries((current) => [entry, ...current]);
+    setSavedEntries((current) => ({ ...current, [entry.id]: cloneEntry(entry) }));
+    clearEntryDirty(entry.id);
     setSelectedEntryId(entry.id);
     setEntryView("edit");
     setStatus({ tone: "ok", text: "已创建新知识。" });
   }
 
-  async function handleSaveEntry() {
-    if (!libraryDir || !selectedTemplate || !selectedEntry || !selectedBaseEntry) return;
+  async function saveCurrentEntry() {
+    if (!libraryDir || !selectedTemplate || !selectedEntry || !selectedBaseEntry) {
+      return false;
+    }
     const missing = selectedTemplate.fields.filter((field) =>
       requiredMissing(field, selectedEntry.values[field.id]),
     );
@@ -626,7 +849,7 @@ export default function App() {
         tone: "warn",
         text: `请先填写必填字段：${missing.map((field) => field.label).join("、")}`,
       });
-      return;
+      return false;
     }
     const next = {
       ...updateEntryLanguageTitle(
@@ -646,7 +869,14 @@ export default function App() {
             new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
         ),
     );
+    setSavedEntries((current) => ({ ...current, [next.id]: cloneEntry(next) }));
+    clearEntryDirty(next.id);
     setStatus({ tone: "ok", text: "知识已保存。" });
+    return true;
+  }
+
+  async function handleSaveEntry() {
+    await saveCurrentEntry();
   }
 
   async function handleDeleteEntry() {
@@ -656,6 +886,12 @@ export default function App() {
     setEntries((current) =>
       current.filter((entry) => entry.id !== selectedEntry.id),
     );
+    setSavedEntries((current) => {
+      const next = { ...current };
+      delete next[selectedEntry.id];
+      return next;
+    });
+    clearEntryDirty(selectedEntry.id);
     setSelectedEntryId("");
     setStatus({ tone: "ok", text: "知识已删除。" });
   }
@@ -675,6 +911,7 @@ export default function App() {
 
   function updateEntryValue(fieldId: string, value: unknown) {
     if (!selectedBaseEntry) return;
+    markEntryDirty(selectedBaseEntry.id);
     setEntries((current) =>
       current.map((entry) =>
         entry.id === selectedBaseEntry.id
@@ -712,6 +949,7 @@ export default function App() {
       updatedAt: createdAt,
     };
     setDraftTemplate(template);
+    setTemplateDirty(true);
     setTemplateEditorOpen(true);
   }
 
@@ -732,27 +970,28 @@ export default function App() {
     setDraftTemplate(
       cloneTemplate(localizeTemplate(copied, currentLanguage, fallbackLanguage)),
     );
+    setTemplateDirty(false);
     setTemplateEditorOpen(true);
     setStatus({ tone: "ok", text: "知识类型已复制。" });
   }
 
-  async function handleSaveTemplate() {
-    if (!draftTemplate || !libraryDir) return;
+  async function saveCurrentTemplate() {
+    if (!draftTemplate || !libraryDir) return false;
     const fieldIds = draftTemplate.fields.map((field) => field.id.trim());
     const duplicate = fieldIds.find(
       (id, index) => fieldIds.indexOf(id) !== index,
     );
     if (!draftTemplate.name.trim()) {
       setStatus({ tone: "warn", text: "类型名称不能为空。" });
-      return;
+      return false;
     }
     if (fieldIds.some((id) => !id)) {
       setStatus({ tone: "warn", text: "字段 ID 不能为空。" });
-      return;
+      return false;
     }
     if (duplicate) {
       setStatus({ tone: "warn", text: `字段 ID 重复：${duplicate}` });
-      return;
+      return false;
     }
     const baseTemplate =
       templates.find((template) => template.id === draftTemplate.id) ??
@@ -773,7 +1012,13 @@ export default function App() {
     setDraftTemplate(
       cloneTemplate(localizeTemplate(next, currentLanguage, fallbackLanguage)),
     );
+    setTemplateDirty(false);
     setStatus({ tone: "ok", text: "知识类型已保存。" });
+    return true;
+  }
+
+  async function handleSaveTemplate() {
+    await saveCurrentTemplate();
   }
 
   async function handleUploadTemplateIcon() {
@@ -783,6 +1028,7 @@ export default function App() {
     setDraftTemplate((current) =>
       current ? { ...current, iconImage, updatedAt: nowIso() } : current,
     );
+    setTemplateDirty(true);
     try {
       const src = await loadTemplateIcon(libraryDir, iconImage);
       setIconSources((current) => ({ ...current, [draftTemplate.id]: src }));
@@ -797,6 +1043,7 @@ export default function App() {
     setDraftTemplate((current) =>
       current ? { ...current, iconImage: "", updatedAt: nowIso() } : current,
     );
+    setTemplateDirty(true);
     setIconSources((current) => ({ ...current, [draftTemplate.id]: "" }));
   }
 
@@ -806,6 +1053,7 @@ export default function App() {
     if (!existing) {
       setDraftTemplate(selectedTemplate ? cloneTemplate(selectedTemplate) : undefined);
       setTemplateEditorOpen(false);
+      setTemplateDirty(false);
       setStatus({ tone: "ok", text: "未保存的知识类型已取消。" });
       return;
     }
@@ -825,6 +1073,8 @@ export default function App() {
     );
     setTemplates(nextTemplates);
     setEntries(nextEntries);
+    setSavedEntries(entriesById(nextEntries));
+    setDirtyEntryIds(new Set());
     const nextSelectedTemplateId = nextTemplates[0]?.id ?? "";
     setSelectedTemplateId(nextSelectedTemplateId);
     setSelectedEntryId(
@@ -838,14 +1088,17 @@ export default function App() {
       return next;
     });
     setTemplateEditorOpen(false);
+    setTemplateDirty(false);
     setStatus({ tone: "ok", text: "知识类型已删除。" });
   }
 
   function updateDraft(patch: Partial<KnowledgeTemplate>) {
+    setTemplateDirty(true);
     setDraftTemplate((current) => (current ? { ...current, ...patch } : current));
   }
 
   function updateDraftField(index: number, patch: Partial<FieldDefinition>) {
+    setTemplateDirty(true);
     setDraftTemplate((current) => {
       if (!current) return current;
       const fields = current.fields.map((field, fieldIndex) =>
@@ -856,6 +1109,7 @@ export default function App() {
   }
 
   function addDraftField() {
+    setTemplateDirty(true);
     setDraftTemplate((current) => {
       if (!current) return current;
       const index = current.fields.length + 1;
@@ -876,6 +1130,7 @@ export default function App() {
   }
 
   function moveDraftField(index: number, direction: -1 | 1) {
+    setTemplateDirty(true);
     setDraftTemplate((current) => {
       if (!current) return current;
       const target = index + direction;
@@ -888,6 +1143,7 @@ export default function App() {
   }
 
   function removeDraftField(index: number) {
+    setTemplateDirty(true);
     setDraftTemplate((current) => {
       if (!current) return current;
       return {
@@ -924,11 +1180,11 @@ export default function App() {
         <div />
 
         <div className="topbar-right">
-          <LanguageSelect
-            value={currentLanguage}
-            onChange={(language) => void handleChangeLanguage(language)}
-          />
-          <button className="topbar-settings" onClick={() => openSettings("library")} title="设置">
+          <button
+            className="topbar-settings"
+            onClick={() => void guardActiveUnsaved(() => openSettings("library"))}
+            title="设置"
+          >
             <Settings size={18} />
             设置
           </button>
@@ -945,7 +1201,7 @@ export default function App() {
               className="text-action"
               disabled={!hasLibrary}
               title="新增知识类型"
-              onClick={createTemplateDraft}
+              onClick={() => void guardActiveUnsaved(createTemplateDraft)}
             >
               <Plus size={16} />
               新增类型
@@ -963,7 +1219,7 @@ export default function App() {
                   className={`type-button ${
                     selectedTemplate?.id === template.id ? "active" : ""
                   }`}
-                  onClick={() => selectTemplate(template.id)}
+                  onClick={() => void guardActiveUnsaved(() => selectTemplate(template.id))}
                 >
                   <span className="type-icon" style={{ color: template.color }}>
                     <TemplateIcon src={iconSrcForTemplate(template)} template={template} />
@@ -979,7 +1235,9 @@ export default function App() {
                 <button
                   className="type-edit-button"
                   disabled={!hasLibrary}
-                  onClick={() => openTemplateEditor(template)}
+                  onClick={() =>
+                    void guardActiveUnsaved(() => openTemplateEditor(template))
+                  }
                   title="编辑知识类型"
                 >
                   <Wrench size={15} />
@@ -997,7 +1255,7 @@ export default function App() {
             <>
             <button
               className={`group-row ${selectedGroup === "" ? "active" : ""}`}
-              onClick={() => setSelectedGroup("")}
+              onClick={() => void guardActiveUnsaved(() => setSelectedGroup(""))}
             >
               <span>全部</span>
               <em>{templateEntries.length}</em>
@@ -1008,7 +1266,7 @@ export default function App() {
                   selectedGroup === group ? "active" : ""
                 }`}
                 key={group}
-                onClick={() => setSelectedGroup(group)}
+                onClick={() => void guardActiveUnsaved(() => setSelectedGroup(group))}
               >
                 <span>{group}</span>
                 <em>{count}</em>
@@ -1046,7 +1304,7 @@ export default function App() {
           <button
             className="list-new-button"
             disabled={!hasLibrary || !selectedTemplate}
-            onClick={handleNewEntry}
+            onClick={() => void guardActiveUnsaved(handleNewEntry)}
           >
             <Plus size={16} />
             新建知识
@@ -1055,7 +1313,10 @@ export default function App() {
 
         <div className="entry-list">
           {!hasLibrary && (
-            <button className="empty-action" onClick={() => openSettings("library")}>
+            <button
+              className="empty-action"
+              onClick={() => void guardActiveUnsaved(() => openSettings("library"))}
+            >
               <FolderOpen size={22} />
               选择资料库目录后开始使用
             </button>
@@ -1069,10 +1330,10 @@ export default function App() {
                 selectedEntry?.id === entry.id ? "active" : ""
               }`}
               key={entry.id}
-              onClick={() => {
+              onClick={() => void guardActiveUnsaved(() => {
                 setSelectedEntryId(entry.id);
                 setEntryView("preview");
-              }}
+              })}
             >
               <div
                 className="entry-icon"
@@ -1103,13 +1364,13 @@ export default function App() {
             <>
               <button
                 className={entryView === "edit" ? "active" : ""}
-                onClick={() => setEntryView("edit")}
+                onClick={() => void guardActiveUnsaved(() => setEntryView("edit"))}
               >
                 编辑
               </button>
               <button
                 className={entryView === "preview" ? "active" : ""}
-                onClick={() => setEntryView("preview")}
+                onClick={() => void guardActiveUnsaved(() => setEntryView("preview"))}
               >
                 预览
               </button>
@@ -1131,13 +1392,16 @@ export default function App() {
         </div>
 
         <EntryEditor
+          emptyLanguages={selectedEntryLanguageEmpty}
           entry={selectedEntry}
+          language={currentLanguage}
           libraryDir={libraryDir}
           markdown={previewMarkdown}
           onDelete={handleDeleteEntry}
           onEdit={() => setEntryView("edit")}
           onExport={handleExportEntry}
           onSave={handleSaveEntry}
+          onSelectLanguage={(language) => void handleChangeLanguage(language)}
           onStatus={setStatus}
           onUpdateValue={updateEntryValue}
           template={selectedTemplate}
@@ -1147,16 +1411,21 @@ export default function App() {
       </div>
       <TemplateEditorDialog
         draftTemplate={draftTemplate}
+        emptyLanguages={selectedTemplateLanguageEmpty}
         iconSrc={iconSrcForTemplate(draftTemplate)}
+        language={currentLanguage}
         open={templateEditorOpen}
         onAddField={addDraftField}
         onClearIcon={handleClearTemplateIcon}
-        onClose={() => setTemplateEditorOpen(false)}
+        onClose={() =>
+          void guardUnsaved("template", () => setTemplateEditorOpen(false))
+        }
         onCopyTemplate={handleCopyTemplate}
         onDeleteTemplate={handleDeleteTemplate}
         onMoveField={moveDraftField}
         onRemoveField={removeDraftField}
         onSaveTemplate={handleSaveTemplate}
+        onSelectLanguage={(language) => void handleChangeLanguage(language)}
         onUploadIcon={handleUploadTemplateIcon}
         onUpdateDraft={updateDraft}
         onUpdateField={updateDraftField}
@@ -1175,13 +1444,52 @@ export default function App() {
         onSelectTab={setSettingsTab}
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
       />
+      <UnsavedChangesDialog
+        open={Boolean(unsavedPrompt)}
+        scope={unsavedPrompt?.scope}
+        onChoose={resolveUnsavedPrompt}
+      />
     </main>
+  );
+}
+
+function UnsavedChangesDialog({
+  onChoose,
+  open,
+  scope,
+}: {
+  onChoose: (choice: UnsavedChoice) => void;
+  open: boolean;
+  scope?: UnsavedScope;
+}) {
+  if (!open) return null;
+  return (
+    <div className="unsaved-overlay">
+      <section aria-label="没有保存" className="unsaved-dialog" role="dialog">
+        <div>
+          <span>{scope === "template" ? "知识类型" : "知识"}</span>
+          <strong>没有保存</strong>
+          <p>当前修改还没有保存。请选择下一步操作。</p>
+        </div>
+        <div className="unsaved-actions">
+          <button onClick={() => onChoose("cancel")}>取消</button>
+          <button className="setting-primary" onClick={() => onChoose("save")}>
+            保存继续
+          </button>
+          <button className="danger-ghost" onClick={() => onChoose("discard")}>
+            不保存继续
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
 function TemplateEditorDialog({
   draftTemplate,
+  emptyLanguages,
   iconSrc,
+  language,
   onAddField,
   onClearIcon,
   onClose,
@@ -1190,13 +1498,16 @@ function TemplateEditorDialog({
   onMoveField,
   onRemoveField,
   onSaveTemplate,
+  onSelectLanguage,
   onUploadIcon,
   onUpdateDraft,
   onUpdateField,
   open,
 }: {
   draftTemplate?: KnowledgeTemplate;
+  emptyLanguages: LanguageEmptyMap;
   iconSrc: string;
+  language: LanguageCode;
   onAddField: () => void;
   onClearIcon: () => void;
   onClose: () => void;
@@ -1205,6 +1516,7 @@ function TemplateEditorDialog({
   onMoveField: (index: number, direction: -1 | 1) => void;
   onRemoveField: (index: number) => void;
   onSaveTemplate: () => void;
+  onSelectLanguage: (language: LanguageCode) => void;
   onUploadIcon: () => void;
   onUpdateDraft: (patch: Partial<KnowledgeTemplate>) => void;
   onUpdateField: (index: number, patch: Partial<FieldDefinition>) => void;
@@ -1224,9 +1536,16 @@ function TemplateEditorDialog({
             <span>知识类型</span>
             <strong>{draftTemplate?.name ?? "编辑知识类型"}</strong>
           </div>
-          <button className="icon-button neutral" onClick={onClose} title="关闭">
-            <X size={18} />
-          </button>
+          <div className="dialog-heading-actions">
+            <LanguageSelect
+              emptyLanguages={emptyLanguages}
+              value={language}
+              onChange={onSelectLanguage}
+            />
+            <button className="icon-button neutral" onClick={onClose} title="关闭">
+              <X size={18} />
+            </button>
+          </div>
         </div>
         <TemplateDesigner
           draftTemplate={draftTemplate}
@@ -1391,10 +1710,12 @@ function SettingsDialog({
 }
 
 function LanguageSelect({
+  emptyLanguages,
   onChange,
   value,
 }: {
-  onChange: (language: LanguageCode) => void;
+  emptyLanguages?: LanguageEmptyMap;
+  onChange: (language: LanguageCode) => void | Promise<void>;
   value: LanguageCode;
 }) {
   const [open, setOpen] = useState(false);
@@ -1440,27 +1761,31 @@ function LanguageSelect({
       </button>
       {open && (
         <div className="language-menu" role="listbox">
-          {supportedLanguages.map((language) => (
-            <button
-              aria-selected={language.code === value}
-              className={`language-option ${
-                language.code === value ? "active" : ""
-              }`}
-              key={language.code}
-              onClick={() => {
-                onChange(normalizeLanguage(language.code));
-                setOpen(false);
-              }}
-              role="option"
-              type="button"
-            >
-              <span
-                aria-hidden="true"
-                className={`language-flag flag-${language.code}`}
-              />
-              <span>{language.label}</span>
-            </button>
-          ))}
+          {supportedLanguages.map((language) => {
+            const maybeEmpty = Boolean(emptyLanguages?.[language.code]);
+            return (
+              <button
+                aria-selected={language.code === value}
+                className={`language-option ${
+                  language.code === value ? "active" : ""
+                }`}
+                key={language.code}
+                onClick={() => {
+                  void onChange(normalizeLanguage(language.code));
+                  setOpen(false);
+                }}
+                role="option"
+                type="button"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`language-flag flag-${language.code}`}
+                />
+                <span>{language.label}</span>
+                {maybeEmpty && <em>可能为空</em>}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1468,25 +1793,31 @@ function LanguageSelect({
 }
 
 function EntryEditor({
+  emptyLanguages,
   entry,
+  language,
   libraryDir,
   markdown,
   onDelete,
   onEdit,
   onExport,
   onSave,
+  onSelectLanguage,
   onStatus,
   onUpdateValue,
   template,
   view,
 }: {
+  emptyLanguages: LanguageEmptyMap;
   entry?: KnowledgeEntry;
+  language: LanguageCode;
   libraryDir: string;
   markdown: string;
   onDelete: () => void;
   onEdit: () => void;
   onExport: () => void;
   onSave: () => void;
+  onSelectLanguage: (language: LanguageCode) => void;
   onStatus: (status: Status) => void;
   onUpdateValue: (fieldId: string, value: unknown) => void;
   template?: KnowledgeTemplate;
@@ -1516,6 +1847,11 @@ function EntryEditor({
             <strong>{template.name}</strong>
           </div>
           <div className="button-row">
+            <LanguageSelect
+              emptyLanguages={emptyLanguages}
+              value={language}
+              onChange={onSelectLanguage}
+            />
             <button onClick={onSave}>
               <Save size={16} />
               保存
@@ -1549,6 +1885,11 @@ function EntryEditor({
             <strong>{entryTitle(template, entry)}</strong>
           </div>
           <div className="button-row">
+            <LanguageSelect
+              emptyLanguages={emptyLanguages}
+              value={language}
+              onChange={onSelectLanguage}
+            />
             <button onClick={onExport}>
               <Download size={16} />
               导出 MD

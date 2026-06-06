@@ -274,6 +274,21 @@ textarea {
   text-align: left;
 }
 
+.language-option > span:last-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.language-option em {
+  margin-left: auto;
+  color: var(--warn);
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
 .language-option:hover,
 .language-option.active {
   border-color: rgba(15, 124, 131, 0.14);
@@ -850,6 +865,62 @@ textarea {
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+.unsaved-overlay {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(24, 38, 42, 0.28);
+  backdrop-filter: blur(6px);
+}
+
+.unsaved-dialog {
+  display: grid;
+  width: min(460px, calc(100vw - 48px));
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 24px 64px rgba(15, 34, 40, 0.22);
+}
+
+.unsaved-dialog span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.unsaved-dialog strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+.unsaved-dialog p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.unsaved-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.unsaved-actions button {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  white-space: nowrap;
 }
 
 .editor-grid,
@@ -1523,7 +1594,7 @@ textarea {
 
 .template-dialog-overlay {
   position: fixed;
-  z-index: 36;
+  z-index: 80;
   inset: 0;
   display: grid;
   place-items: center;
@@ -1556,6 +1627,12 @@ textarea {
   background: #fbfdfd;
 }
 
+.dialog-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .template-dialog-header span {
   display: block;
   color: var(--muted);
@@ -1576,7 +1653,7 @@ textarea {
 
 .settings-overlay {
   position: fixed;
-  z-index: 20;
+  z-index: 70;
   inset: 0;
   display: grid;
   place-items: center;
