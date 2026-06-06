@@ -1278,8 +1278,16 @@ function LanguageSelect({
   onChange: (language: LanguageCode) => void;
   value: LanguageCode;
 }) {
+  const selectedLanguage =
+    supportedLanguages.find((language) => language.code === value) ??
+    supportedLanguages[0];
+
   return (
     <label className="language-picker">
+      <span
+        aria-hidden="true"
+        className={`language-flag flag-${selectedLanguage.code}`}
+      />
       <select
         aria-label="当前语言"
         value={value}
@@ -1289,7 +1297,7 @@ function LanguageSelect({
       >
         {supportedLanguages.map((language) => (
           <option key={language.code} value={language.code}>
-            {language.flag} {language.label}
+            {language.label}
           </option>
         ))}
       </select>

@@ -202,13 +202,108 @@ textarea {
 }
 
 .language-picker {
+  position: relative;
   display: block;
   width: 170px;
 }
 
 .language-picker select {
   height: 36px;
-  padding: 0 10px;
+  padding: 0 10px 0 46px;
+}
+
+.language-flag {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 13px;
+  display: block;
+  width: 24px;
+  height: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(20, 41, 48, 0.18);
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(20, 41, 48, 0.12);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.flag-zh {
+  background: #de2910;
+}
+
+.flag-zh::before {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  width: 7px;
+  height: 7px;
+  background: #ffde00;
+  clip-path: polygon(
+    50% 0,
+    61% 35%,
+    98% 35%,
+    68% 56%,
+    79% 91%,
+    50% 70%,
+    21% 91%,
+    32% 56%,
+    2% 35%,
+    39% 35%
+  );
+  content: "";
+}
+
+.flag-en {
+  background:
+    linear-gradient(#3c3b6e 0 54%, transparent 54%) 0 0 / 44% 54% no-repeat,
+    repeating-linear-gradient(
+      to bottom,
+      #b22234 0 1.23px,
+      #fff 1.23px 2.46px
+    );
+}
+
+.flag-ja {
+  background: radial-gradient(circle at center, #bc002d 0 33%, #fff 34%);
+}
+
+.flag-ko {
+  background:
+    radial-gradient(circle at 50% 50%, transparent 0 28%, #fff 29%),
+    linear-gradient(90deg, #c60c30 0 50%, #003478 50%),
+    #fff;
+}
+
+.flag-it {
+  background: linear-gradient(90deg, #009246 0 33%, #fff 33% 66%, #ce2b37 66%);
+}
+
+.flag-es {
+  background: linear-gradient(#aa151b 0 25%, #f1bf00 25% 75%, #aa151b 75%);
+}
+
+.flag-de {
+  background: linear-gradient(#000 0 33%, #dd0000 33% 66%, #ffce00 66%);
+}
+
+.flag-pt {
+  background: linear-gradient(90deg, #006600 0 42%, #ff0000 42%);
+}
+
+.flag-pt::before {
+  position: absolute;
+  top: 5px;
+  left: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #ffcc00;
+  content: "";
+}
+
+.flag-ru {
+  background: linear-gradient(#fff 0 33%, #0039a6 33% 66%, #d52b1e 66%);
 }
 
 .topbar-actions button:first-child {
@@ -1135,8 +1230,17 @@ textarea {
 }
 
 .template-designer {
+  display: block;
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
+}
+
+.template-designer .designer-panel {
+  overflow: hidden;
+}
+
+.template-designer .designer-panel + .designer-panel {
+  margin-top: 14px;
 }
 
 .button-row {
@@ -1299,11 +1403,11 @@ textarea {
 
 .markdown-template-panel textarea {
   width: calc(100% - 36px);
-  min-height: calc(100% - 94px);
+  min-height: 260px;
   margin: 18px;
   padding: 12px;
   line-height: 1.6;
-  resize: none;
+  resize: vertical;
 }
 
 .settings-overlay {
