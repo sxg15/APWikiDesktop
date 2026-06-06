@@ -34,6 +34,9 @@ export interface KnowledgeTemplate {
   description: string;
   icon?: string;
   iconImage?: string;
+  titleFieldId?: string;
+  iconFieldId?: string;
+  descriptionFieldId?: string;
   color: string;
   fields: FieldDefinition[];
   markdownTemplate: string;

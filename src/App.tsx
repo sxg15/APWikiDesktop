@@ -77,6 +77,8 @@ import {
 } from "./localization";
 import {
   defaultValueForField,
+  entryIconAssetPaths,
+  entryListDescription,
   entryTitle,
   formatDate,
   renderMarkdownTemplate,
@@ -181,6 +183,71 @@ function TemplateIcon({
   }
   const Icon = templateIcons[templateIconName(template)] ?? BookOpen;
   return <Icon size={size} />;
+}
+
+function EntryListIcon({
+  entry,
+  libraryDir,
+  template,
+  templateIconSrc,
+}: {
+  entry: KnowledgeEntry;
+  libraryDir: string;
+  template?: KnowledgeTemplate;
+  templateIconSrc: string;
+}) {
+  const [entryIconFrames, setEntryIconFrames] = useState<string[]>([]);
+  const [frameIndex, setFrameIndex] = useState(0);
+  const iconAssetPaths = useMemo(
+    () => (template ? entryIconAssetPaths(template, entry) : []),
+    [entry, template],
+  );
+  const iconAssetPathKey = iconAssetPaths.join("|");
+
+  useEffect(() => {
+    let cancelled = false;
+    setFrameIndex(0);
+    if (!iconAssetPaths.length) {
+      setEntryIconFrames([]);
+      return;
+    }
+    void Promise.all(
+      iconAssetPaths.map((assetPath) =>
+        /^(data:|blob:|https?:)/.test(assetPath)
+          ? Promise.resolve(assetPath)
+          : loadLibraryAsset(libraryDir, assetPath),
+      ),
+    )
+      .then((frames) => {
+        if (!cancelled) setEntryIconFrames(frames.filter(Boolean));
+      })
+      .catch(() => {
+        if (!cancelled) setEntryIconFrames([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [iconAssetPathKey, iconAssetPaths, libraryDir]);
+
+  useEffect(() => {
+    if (entryIconFrames.length <= 1) return;
+    const timer = window.setInterval(() => {
+      setFrameIndex((current) => (current + 1) % entryIconFrames.length);
+    }, 260);
+    return () => window.clearInterval(timer);
+  }, [entryIconFrames.length]);
+
+  const entryIconSrc =
+    entryIconFrames.length > 0
+      ? entryIconFrames[frameIndex % entryIconFrames.length]
+      : "";
+
+  return (
+    <TemplateIcon
+      src={entryIconSrc || templateIconSrc}
+      template={template}
+    />
+  );
 }
 
 function cloneTemplate(template: KnowledgeTemplate) {
@@ -349,11 +416,18 @@ function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
     ...template,
     color: template.color || "#0f7c80",
     description: template.description ?? "",
+    titleFieldId: normalizeFieldId(template.titleFieldId),
+    iconFieldId: normalizeFieldId(template.iconFieldId),
+    descriptionFieldId: normalizeFieldId(template.descriptionFieldId),
     icon: templateIconName(template),
     fields: template.fields.map(normalizeField),
     translations: translations as KnowledgeTemplate["translations"],
     markdownTemplate: normalizeMarkdownTemplate(template.markdownTemplate),
   };
+}
+
+function normalizeFieldId(fieldId?: string) {
+  return fieldId === "category" ? "group" : fieldId;
 }
 
 function normalizeField(field: FieldDefinition): FieldDefinition {
@@ -1339,17 +1413,28 @@ export default function App() {
                 className="entry-icon"
                 style={{ background: selectedTemplate?.color }}
               >
+                {selectedTemplate ? (
+                <EntryListIcon
+                  entry={entry}
+                  libraryDir={libraryDir}
+                  template={selectedTemplate}
+                  templateIconSrc={iconSrcForTemplate(selectedTemplate)}
+                />
+                ) : (
                 <TemplateIcon
-                  src={iconSrcForTemplate(selectedTemplate)}
+                  src=""
                   template={selectedTemplate}
                 />
+                )}
               </div>
               <div>
                 <strong>
                   {selectedTemplate ? entryTitle(selectedTemplate, entry) : entry.title}
                 </strong>
                 <span>
-                  {entryGroup(entry)}
+                  {selectedTemplate
+                    ? entryListDescription(selectedTemplate, entry) || entryGroup(entry)
+                    : entryGroup(entry)}
                 </span>
                 <small>更新于 {formatDate(entry.updatedAt)}</small>
               </div>
@@ -2531,6 +2616,25 @@ function TemplateDesigner({
       </div>
     );
   }
+  const textFields = draftTemplate.fields.filter((field) => field.type === "text");
+  const mediaFields = draftTemplate.fields.filter(
+    (field) => field.type === "image" || field.type === "frameSequence",
+  );
+  const titleFieldId = textFields.some(
+    (field) => field.id === draftTemplate.titleFieldId,
+  )
+    ? draftTemplate.titleFieldId
+    : "";
+  const iconFieldId = mediaFields.some(
+    (field) => field.id === draftTemplate.iconFieldId,
+  )
+    ? draftTemplate.iconFieldId
+    : "";
+  const descriptionFieldId = textFields.some(
+    (field) => field.id === draftTemplate.descriptionFieldId,
+  )
+    ? draftTemplate.descriptionFieldId
+    : "";
 
   return (
     <div className="template-designer">
@@ -2588,6 +2692,60 @@ function TemplateDesigner({
               value={draftTemplate.color}
               onChange={(event) => onUpdateDraft({ color: event.target.value })}
             />
+          </label>
+          <label>
+            知识标题字段
+            <select
+              value={titleFieldId}
+              onChange={(event) =>
+                onUpdateDraft({
+                  titleFieldId: event.target.value || undefined,
+                })
+              }
+            >
+              <option value="">未设置</option>
+              {textFields.map((field) => (
+                <option key={field.id} value={field.id}>
+                  {field.label} / {field.id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            知识图标字段
+            <select
+              value={iconFieldId}
+              onChange={(event) =>
+                onUpdateDraft({
+                  iconFieldId: event.target.value || undefined,
+                })
+              }
+            >
+              <option value="">未设置</option>
+              {mediaFields.map((field) => (
+                <option key={field.id} value={field.id}>
+                  {field.label} / {fieldTypeLabels[field.type]} / {field.id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            小字说明字段
+            <select
+              value={descriptionFieldId}
+              onChange={(event) =>
+                onUpdateDraft({
+                  descriptionFieldId: event.target.value || undefined,
+                })
+              }
+            >
+              <option value="">未设置</option>
+              {textFields.map((field) => (
+                <option key={field.id} value={field.id}>
+                  {field.label} / {field.id}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="wide">
             简介

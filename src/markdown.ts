@@ -27,12 +27,51 @@ export function valuesFromTemplate(template: KnowledgeTemplate) {
 }
 
 export function entryTitle(template: KnowledgeTemplate, entry: KnowledgeEntry) {
+  const configured = textFieldById(template, template.titleFieldId);
   const preferred =
+    configured ??
     template.fields.find((field) =>
       ["name", "displayName", "title", "methodName"].includes(field.id),
-    ) ?? template.fields.find((field) => field.type === "text");
+    ) ??
+    template.fields.find((field) => field.type === "text");
   const raw = preferred ? entry.values[preferred.id] : entry.title;
-  return typeof raw === "string" && raw.trim() ? raw.trim() : "未命名知识";
+  const title = textValue(raw);
+  return title || "未命名知识";
+}
+
+export function entryListDescription(
+  template: KnowledgeTemplate,
+  entry: KnowledgeEntry,
+) {
+  const field = textFieldById(template, template.descriptionFieldId);
+  return field ? textValue(entry.values[field.id]) : "";
+}
+
+export function entryIconAssetPath(
+  template: KnowledgeTemplate,
+  entry: KnowledgeEntry,
+) {
+  return entryIconAssetPaths(template, entry)[0] ?? "";
+}
+
+export function entryIconAssetPaths(
+  template: KnowledgeTemplate,
+  entry: KnowledgeEntry,
+) {
+  const field = template.fields.find(
+    (item) =>
+      item.id === template.iconFieldId &&
+      (item.type === "image" || item.type === "frameSequence"),
+  );
+  if (!field) return [];
+  const value = entry.values[field.id];
+  if (field.type === "image") {
+    return typeof value === "string" && value ? [value] : [];
+  }
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is string => typeof item === "string" && Boolean(item),
+  );
 }
 
 export function renderMarkdownTemplate(
@@ -145,4 +184,15 @@ function escapeTableCell(value: unknown) {
   return String(value ?? "")
     .replace(/\|/g, "\\|")
     .replace(/\n/g, "<br />");
+}
+
+function textFieldById(template: KnowledgeTemplate, fieldId?: string) {
+  if (!fieldId) return undefined;
+  return template.fields.find(
+    (field) => field.id === fieldId && field.type === "text",
+  );
+}
+
+function textValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
