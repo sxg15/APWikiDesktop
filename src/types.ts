@@ -7,6 +7,8 @@ export type FieldType =
   | "multiselect"
   | "tags"
   | "parameterTable"
+  | "image"
+  | "frameSequence"
   | "markdown";
 
 export interface FieldOption {

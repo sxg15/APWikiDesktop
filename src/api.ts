@@ -56,19 +56,59 @@ export async function importTemplateIcon(
     });
   }
 
-  return readBrowserImage();
+  const images = await readBrowserImages(false);
+  return images[0];
 }
 
-export async function loadTemplateIcon(libraryDir: string, iconImage?: string) {
-  if (!iconImage) return "";
-  if (/^(data:|blob:|https?:)/.test(iconImage)) return iconImage;
+export async function importEntryImages(
+  libraryDir: string,
+  entryId: string,
+  fieldId: string,
+  multiple: boolean,
+) {
+  if (isTauri()) {
+    const selected = await open({
+      directory: false,
+      filters: [
+        {
+          name: "图片",
+          extensions: ["png", "jpg", "jpeg", "webp", "gif", "svg"],
+        },
+      ],
+      multiple,
+      title: multiple ? "选择序列帧图片" : "选择图片",
+    });
+    const sourcePaths = Array.isArray(selected)
+      ? selected
+      : typeof selected === "string"
+        ? [selected]
+        : [];
+    if (!sourcePaths.length) return [];
+    return invoke<string[]>("import_entry_images", {
+      entryId,
+      fieldId,
+      libraryDir,
+      sourcePaths,
+    });
+  }
+
+  return readBrowserImages(multiple);
+}
+
+export async function loadLibraryAsset(libraryDir: string, assetPath?: string) {
+  if (!assetPath) return "";
+  if (/^(data:|blob:|https?:)/.test(assetPath)) return assetPath;
   if (isTauri()) {
     return invoke<string>("read_library_asset", {
-      assetPath: iconImage,
+      assetPath,
       libraryDir,
     });
   }
-  return iconImage;
+  return assetPath;
+}
+
+export async function loadTemplateIcon(libraryDir: string, iconImage?: string) {
+  return loadLibraryAsset(libraryDir, iconImage);
 }
 
 export async function getSettings(): Promise<AppSettings> {
@@ -79,24 +119,35 @@ export async function getSettings(): Promise<AppSettings> {
   return raw ? JSON.parse(raw) : {};
 }
 
-function readBrowserImage() {
-  return new Promise<string | undefined>((resolve) => {
+function readBrowserImages(multiple: boolean) {
+  return new Promise<string[]>((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/png,image/jpeg,image/webp,image/gif,image/svg+xml";
+    input.multiple = multiple;
     input.onchange = () => {
-      const file = input.files?.[0];
-      if (!file) {
-        resolve(undefined);
+      const files = Array.from(input.files ?? []);
+      if (!files.length) {
+        resolve([]);
         return;
       }
-      const reader = new FileReader();
-      reader.onload = () =>
-        resolve(typeof reader.result === "string" ? reader.result : undefined);
-      reader.onerror = () => resolve(undefined);
-      reader.readAsDataURL(file);
+      void Promise.all(files.map(readFileAsDataUrl)).then(resolve, () =>
+        resolve([]),
+      );
     };
     input.click();
+  });
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(new Error("图片读取失败"));
+    reader.onerror = () => reject(reader.error ?? new Error("图片读取失败"));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -122,10 +173,10 @@ export async function saveTemplate(libraryDir: string, template: KnowledgeTempla
     return;
   }
   const state = await loadLibrary(libraryDir);
-  const next = [
-    ...state.templates.filter((item) => item.id !== template.id),
-    template,
-  ];
+  const exists = state.templates.some((item) => item.id === template.id);
+  const next = exists
+    ? state.templates.map((item) => (item.id === template.id ? template : item))
+    : [...state.templates, template];
   localStorage.setItem(
     browserLibraryKey(libraryDir),
     JSON.stringify({ ...state, templates: next, initialized: true }),

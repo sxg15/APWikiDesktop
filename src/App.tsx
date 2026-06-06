@@ -20,16 +20,21 @@ import {
   Gamepad2,
   Grid3x3,
   Image as ImageIcon,
+  Images,
   Layers,
   LayoutTemplate,
   ListTree,
   Menu,
+  Pause,
   Plus,
+  Play,
   Puzzle,
   Save,
   Search,
   Settings,
   Sparkles,
+  StepBack,
+  StepForward,
   ScrollText,
   Trash2,
   Upload,
@@ -43,7 +48,9 @@ import {
   deleteTemplate,
   exportEntryMarkdown,
   getSettings,
+  importEntryImages,
   importTemplateIcon,
+  loadLibraryAsset,
   loadTemplateIcon,
   loadLibrary,
   saveEntry,
@@ -80,10 +87,19 @@ const fieldTypeLabels: Record<FieldType, string> = {
   multiselect: "多选",
   tags: "标签",
   parameterTable: "参数表",
+  image: "单帧图片",
+  frameSequence: "序列帧",
   markdown: "Markdown 文本",
 };
 
 const fieldTypes = Object.keys(fieldTypeLabels) as FieldType[];
+const fieldsWithoutTextDefault = new Set<FieldType>([
+  "parameterTable",
+  "multiselect",
+  "tags",
+  "image",
+  "frameSequence",
+]);
 
 const templateIcons: Record<string, LucideIcon> = {
   BookOpen,
@@ -964,8 +980,10 @@ export default function App() {
         ) : (
           <EntryEditor
             entry={selectedEntry}
+            libraryDir={libraryDir}
             markdown={previewMarkdown}
             onDelete={handleDeleteEntry}
+            onStatus={setStatus}
             onUpdateValue={updateEntryValue}
             template={selectedTemplate}
           />
@@ -1102,14 +1120,18 @@ function SettingsDialog({
 
 function EntryEditor({
   entry,
+  libraryDir,
   markdown,
   onDelete,
+  onStatus,
   onUpdateValue,
   template,
 }: {
   entry?: KnowledgeEntry;
+  libraryDir: string;
   markdown: string;
   onDelete: () => void;
+  onStatus: (status: Status) => void;
   onUpdateValue: (fieldId: string, value: unknown) => void;
   template?: KnowledgeTemplate;
 }) {
@@ -1139,9 +1161,12 @@ function EntryEditor({
         <div className="field-stack">
           {template.fields.map((field) => (
             <FieldInput
+              entryId={entry.id}
               field={field}
               key={field.id}
+              libraryDir={libraryDir}
               value={entry.values[field.id]}
+              onStatus={onStatus}
               onChange={(value) => onUpdateValue(field.id, value)}
             />
           ))}
@@ -1164,12 +1189,18 @@ function EntryEditor({
 }
 
 function FieldInput({
+  entryId,
   field,
+  libraryDir,
   onChange,
+  onStatus,
   value,
 }: {
+  entryId: string;
   field: FieldDefinition;
+  libraryDir: string;
   onChange: (value: unknown) => void;
+  onStatus: (status: Status) => void;
   value: unknown;
 }) {
   const missing = requiredMissing(field, value);
@@ -1286,6 +1317,38 @@ function FieldInput({
     );
   }
 
+  if (field.type === "image") {
+    return (
+      <ImageFieldInput
+        entryId={entryId}
+        field={field}
+        label={label}
+        libraryDir={libraryDir}
+        onChange={onChange}
+        onStatus={onStatus}
+        value={typeof value === "string" ? value : ""}
+      />
+    );
+  }
+
+  if (field.type === "frameSequence") {
+    return (
+      <FrameSequenceInput
+        entryId={entryId}
+        field={field}
+        label={label}
+        libraryDir={libraryDir}
+        onChange={onChange}
+        onStatus={onStatus}
+        value={
+          Array.isArray(value)
+            ? value.filter((item): item is string => typeof item === "string")
+            : []
+        }
+      />
+    );
+  }
+
   return (
     <div className="form-field">
       {label}
@@ -1299,6 +1362,247 @@ function FieldInput({
           )
         }
       />
+    </div>
+  );
+}
+
+function ImageFieldInput({
+  entryId,
+  field,
+  label,
+  libraryDir,
+  onChange,
+  onStatus,
+  value,
+}: {
+  entryId: string;
+  field: FieldDefinition;
+  label: ReactNode;
+  libraryDir: string;
+  onChange: (value: string) => void;
+  onStatus: (status: Status) => void;
+  value: string;
+}) {
+  const [source, setSource] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!value) {
+        setSource("");
+        return;
+      }
+      try {
+        const loaded = await loadLibraryAsset(libraryDir, value);
+        if (!cancelled) setSource(loaded);
+      } catch {
+        if (!cancelled) setSource("");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [libraryDir, value]);
+
+  async function handleUpload() {
+    try {
+      const imported = await importEntryImages(libraryDir, entryId, field.id, false);
+      if (!imported[0]) return;
+      onChange(imported[0]);
+      onStatus({ tone: "ok", text: "图片已导入。" });
+    } catch (error) {
+      onStatus({ tone: "warn", text: `图片导入失败：${String(error)}` });
+    }
+  }
+
+  return (
+    <div className="form-field">
+      {label}
+      <div className="media-field">
+        <div className="media-preview image-preview">
+          {source ? (
+            <img alt={field.label} src={source} />
+          ) : (
+            <div className="media-empty">
+              <ImageIcon size={28} />
+              <span>未上传图片</span>
+            </div>
+          )}
+        </div>
+        <div className="media-actions">
+          <button disabled={!libraryDir} onClick={() => void handleUpload()}>
+            <Upload size={16} />
+            上传图片
+          </button>
+          <button disabled={!value} onClick={() => onChange("")}>
+            <X size={16} />
+            移除图片
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FrameSequenceInput({
+  entryId,
+  field,
+  label,
+  libraryDir,
+  onChange,
+  onStatus,
+  value,
+}: {
+  entryId: string;
+  field: FieldDefinition;
+  label: ReactNode;
+  libraryDir: string;
+  onChange: (value: string[]) => void;
+  onStatus: (status: Status) => void;
+  value: string[];
+}) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [sources, setSources] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const loaded = await Promise.all(
+        value.map(async (assetPath) => {
+          try {
+            return await loadLibraryAsset(libraryDir, assetPath);
+          } catch {
+            return "";
+          }
+        }),
+      );
+      if (!cancelled) setSources(loaded);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [libraryDir, value]);
+
+  useEffect(() => {
+    if (currentIndex >= value.length) {
+      setCurrentIndex(Math.max(0, value.length - 1));
+    }
+    if (value.length < 2) setPlaying(false);
+  }, [currentIndex, value.length]);
+
+  useEffect(() => {
+    if (!playing || value.length < 2) return;
+    const timer = window.setInterval(() => {
+      setCurrentIndex((index) => (index + 1) % value.length);
+    }, 120);
+    return () => window.clearInterval(timer);
+  }, [playing, value.length]);
+
+  async function handleUpload() {
+    try {
+      const imported = await importEntryImages(libraryDir, entryId, field.id, true);
+      if (!imported.length) return;
+      onChange([...value, ...imported]);
+      setCurrentIndex(value.length);
+      onStatus({ tone: "ok", text: `已导入 ${imported.length} 张序列帧。` });
+    } catch (error) {
+      onStatus({ tone: "warn", text: `序列帧导入失败：${String(error)}` });
+    }
+  }
+
+  function removeFrame(index: number) {
+    const next = value.filter((_, frameIndex) => frameIndex !== index);
+    onChange(next);
+    setCurrentIndex(Math.min(index, Math.max(0, next.length - 1)));
+  }
+
+  const currentSource = sources[currentIndex] ?? "";
+
+  return (
+    <div className="form-field">
+      {label}
+      <div className="media-field">
+        <div className="media-preview sequence-preview">
+          {currentSource ? (
+            <img alt={`${field.label} ${currentIndex + 1}`} src={currentSource} />
+          ) : (
+            <div className="media-empty">
+              <Images size={28} />
+              <span>未上传序列帧</span>
+            </div>
+          )}
+        </div>
+        <div className="sequence-controls">
+          <button
+            className="sequence-step"
+            disabled={value.length < 2}
+            onClick={() =>
+              setCurrentIndex((index) =>
+                index === 0 ? value.length - 1 : index - 1,
+              )
+            }
+            title="上一帧"
+          >
+            <StepBack size={16} />
+          </button>
+          <button
+            className="sequence-step"
+            disabled={value.length < 2}
+            onClick={() => setPlaying((current) => !current)}
+            title={playing ? "暂停" : "播放"}
+          >
+            {playing ? <Pause size={16} /> : <Play size={16} />}
+          </button>
+          <button
+            className="sequence-step"
+            disabled={value.length < 2}
+            onClick={() =>
+              setCurrentIndex((index) => (index + 1) % value.length)
+            }
+            title="下一帧"
+          >
+            <StepForward size={16} />
+          </button>
+          <span>
+            {value.length ? currentIndex + 1 : 0} / {value.length}
+          </span>
+          <button disabled={!libraryDir} onClick={() => void handleUpload()}>
+            <Upload size={16} />
+            上传序列帧
+          </button>
+          <button disabled={!value.length} onClick={() => onChange([])}>
+            <X size={16} />
+            清空
+          </button>
+        </div>
+        {value.length > 0 && (
+          <div className="sequence-strip">
+            {value.map((assetPath, index) => (
+              <div
+                className={index === currentIndex ? "active" : ""}
+                key={`${assetPath}-${index}`}
+              >
+                <button onClick={() => setCurrentIndex(index)} title={`第 ${index + 1} 帧`}>
+                  {sources[index] ? (
+                    <img alt="" src={sources[index]} />
+                  ) : (
+                    <Images size={15} />
+                  )}
+                  <span>{index + 1}</span>
+                </button>
+                <button
+                  className="frame-remove"
+                  onClick={() => removeFrame(index)}
+                  title="删除这一帧"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1548,15 +1852,17 @@ function TemplateDesigner({
                 />
                 <select
                   value={field.type}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const type = event.target.value as FieldType;
                     onUpdateField(index, {
-                      type: event.target.value as FieldType,
+                      type,
                       defaultValue: defaultValueForField({
                         ...field,
-                        type: event.target.value as FieldType,
+                        defaultValue: undefined,
+                        type,
                       }),
-                    })
-                  }
+                    });
+                  }}
                 >
                   {fieldTypes.map((type) => (
                     <option key={type} value={type}>
@@ -1602,11 +1908,7 @@ function TemplateDesigner({
                 <label>
                   默认值
                   <input
-                    disabled={
-                      field.type === "parameterTable" ||
-                      field.type === "multiselect" ||
-                      field.type === "tags"
-                    }
+                    disabled={fieldsWithoutTextDefault.has(field.type)}
                     value={String(field.defaultValue ?? "")}
                     onChange={(event) =>
                       onUpdateField(index, { defaultValue: event.target.value })
@@ -1627,7 +1929,7 @@ function TemplateDesigner({
                   <label className="wide">
                     选项
                     <input
-                      placeholder="用逗号分隔，例如 战斗，移动，数值"
+                      placeholder="用逗号分隔多个选项"
                       value={optionsToText(field.options)}
                       onChange={(event) =>
                         onUpdateField(index, {

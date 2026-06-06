@@ -945,6 +945,146 @@ textarea {
   background: var(--panel);
 }
 
+.media-field {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+
+.media-preview {
+  display: grid;
+  width: 100%;
+  min-height: 220px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.image-preview,
+.sequence-preview {
+  aspect-ratio: 16 / 9;
+}
+
+.media-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.media-empty {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.media-empty svg {
+  color: var(--quiet);
+  stroke-width: 1.7;
+}
+
+.media-actions,
+.sequence-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.media-actions button,
+.sequence-controls button {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+}
+
+.sequence-controls .sequence-step {
+  width: 34px;
+  padding: 0;
+}
+
+.sequence-controls span {
+  min-width: 54px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.sequence-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+  gap: 8px;
+}
+
+.sequence-strip > div {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.sequence-strip > div.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 124, 131, 0.12);
+}
+
+.sequence-strip > div > button:first-child {
+  display: grid;
+  width: 100%;
+  height: 82px;
+  grid-template-rows: minmax(0, 1fr) 22px;
+  align-items: center;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+}
+
+.sequence-strip img {
+  width: 100%;
+  height: 58px;
+  padding: 4px;
+  object-fit: contain;
+}
+
+.sequence-strip span {
+  display: block;
+  width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.frame-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0;
+  border-color: rgba(179, 71, 71, 0.25);
+  color: var(--danger);
+  background: rgba(255, 255, 255, 0.9);
+}
+
 .markdown-preview {
   padding: 22px 24px 44px;
   color: var(--text);
@@ -965,6 +1105,16 @@ textarea {
 
 .markdown-preview p {
   margin: 8px 0;
+}
+
+.markdown-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
 }
 
 .markdown-preview table {

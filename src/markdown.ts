@@ -9,7 +9,13 @@ export function defaultValueForField(field: FieldDefinition): unknown {
   if (field.defaultValue !== undefined) return field.defaultValue;
   if (field.type === "boolean") return false;
   if (field.type === "number") return 0;
-  if (field.type === "multiselect" || field.type === "tags") return [];
+  if (
+    field.type === "multiselect" ||
+    field.type === "tags" ||
+    field.type === "frameSequence"
+  ) {
+    return [];
+  }
   if (field.type === "parameterTable") return [];
   return "";
 }
@@ -61,9 +67,39 @@ function formatValue(field: FieldDefinition, value: unknown) {
   if (field.type === "tags" || field.type === "multiselect") {
     return Array.isArray(value) ? value.filter(Boolean).join("，") : "";
   }
+  if (field.type === "image") return formatImage(field.label, value);
+  if (field.type === "frameSequence") return formatFrameSequence(field.label, value);
   if (field.type === "boolean") return value ? "是" : "否";
   if (value === null || value === undefined) return "";
   return String(value);
+}
+
+function formatImage(label: string, value: unknown) {
+  if (typeof value !== "string" || !value) return "";
+  return `![${escapeImageAlt(label)}](${markdownAssetPath(value)})`;
+}
+
+function formatFrameSequence(label: string, value: unknown) {
+  const frames = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item))
+    : [];
+  if (!frames.length) return "";
+  return frames
+    .map(
+      (frame, index) =>
+        `![${escapeImageAlt(`${label} ${index + 1}`)}](${markdownAssetPath(frame)})`,
+    )
+    .join("\n\n");
+}
+
+function markdownAssetPath(value: string) {
+  if (/^(data:|blob:|https?:)/.test(value)) return value;
+  const normalized = value.replace(/\\/g, "/");
+  return normalized.startsWith("assets/") ? `../${normalized}` : normalized;
+}
+
+function escapeImageAlt(value: string) {
+  return value.replace(/\]/g, "\\]");
 }
 
 function formatParameterTable(value: unknown) {

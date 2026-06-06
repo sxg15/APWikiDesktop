@@ -120,6 +120,37 @@ fn import_template_icon(
 }
 
 #[tauri::command]
+fn import_entry_images(
+    library_dir: String,
+    entry_id: String,
+    field_id: String,
+    source_paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    validate_id(&entry_id)?;
+    let root = ensure_library(&library_dir)?;
+    let field_dir = sanitize_asset_stem(&field_id);
+    let field_dir = if field_dir.is_empty() {
+        "field".to_string()
+    } else {
+        field_dir
+    };
+    let target_dir = format!("assets/entry-media/{entry_id}/{field_dir}");
+    let mut imported = Vec::with_capacity(source_paths.len());
+    for (index, source_path) in source_paths.iter().enumerate() {
+        imported.push(import_image_asset(
+            &root,
+            source_path,
+            &target_dir,
+            &format!("frame-{index}"),
+        )?);
+    }
+    if !imported.is_empty() {
+        mark_library_initialized(&root)?;
+    }
+    Ok(imported)
+}
+
+#[tauri::command]
 fn read_library_asset(library_dir: String, asset_path: String) -> Result<String, String> {
     let root = ensure_library(&library_dir)?;
     let path = resolve_library_asset(&root, &asset_path)?;
@@ -187,6 +218,7 @@ pub fn run() {
             save_template,
             delete_template,
             import_template_icon,
+            import_entry_images,
             read_library_asset,
             save_entry,
             delete_entry,
@@ -273,6 +305,50 @@ fn image_mime_type(path: &Path) -> Result<&'static str, String> {
         Some(ext) => Err(format!("Unsupported image type: {ext}")),
         None => Err("Icon file must have an image extension.".to_string()),
     }
+}
+
+fn import_image_asset(
+    root: &Path,
+    source_path: &str,
+    target_dir: &str,
+    prefix: &str,
+) -> Result<String, String> {
+    let source = PathBuf::from(source_path);
+    if !source.is_file() {
+        return Err(format!("Image file was not found: {source_path}"));
+    }
+    let ext = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .ok_or_else(|| "Image file must have an image extension.".to_string())?;
+    if !is_supported_image_extension(&ext) {
+        return Err(format!("Unsupported image type: {ext}"));
+    }
+    let stem = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| sanitize_asset_stem(value))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "image".to_string());
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("Failed to create image timestamp: {error}"))?
+        .as_millis();
+    let prefix = sanitize_asset_stem(prefix);
+    let relative = if prefix.is_empty() {
+        format!("{target_dir}/{stamp}-{stem}.{ext}")
+    } else {
+        format!("{target_dir}/{prefix}-{stamp}-{stem}.{ext}")
+    };
+    let target = root.join(&relative);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create {:?}: {error}", parent))?;
+    }
+    fs::copy(&source, &target)
+        .map_err(|error| format!("Failed to copy image {:?}: {error}", source))?;
+    Ok(relative)
 }
 
 fn sanitize_asset_stem(value: &str) -> String {
@@ -430,6 +506,21 @@ mod tests {
         .expect("icon should be imported");
         let icon_data_url = read_library_asset(library_dir.clone(), icon_asset.clone())
             .expect("icon should be readable");
+        let source_frame = root.join("source-frame.svg");
+        fs::write(
+            &source_frame,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"></svg>"#,
+        )
+        .expect("test frame should be written");
+        let frame_assets = import_entry_images(
+            library_dir.clone(),
+            "entry-1".to_string(),
+            "preview".to_string(),
+            vec![source_frame.to_string_lossy().to_string()],
+        )
+        .expect("entry image should be imported");
+        let frame_data_url = read_library_asset(library_dir.clone(), frame_assets[0].clone())
+            .expect("entry image should be readable");
 
         let loaded = load_library(library_dir).expect("library should load");
         assert_eq!(loaded.templates.len(), 1);
@@ -438,6 +529,9 @@ mod tests {
         assert!(PathBuf::from(exported).exists());
         assert!(root.join(icon_asset).exists());
         assert!(icon_data_url.starts_with("data:image/png;base64,"));
+        assert!(root.join(&frame_assets[0]).exists());
+        assert!(frame_assets[0].starts_with("assets/entry-media/entry-1/preview/"));
+        assert!(frame_data_url.starts_with("data:image/svg+xml;base64,"));
 
         fs::remove_dir_all(root).expect("test library should be cleaned");
     }
