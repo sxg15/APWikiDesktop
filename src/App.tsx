@@ -192,6 +192,47 @@ function requiredMissing(field: FieldDefinition, value: unknown) {
   return value === undefined || value === null || String(value).trim() === "";
 }
 
+function entryGroup(entry: KnowledgeEntry) {
+  const value =
+    entry.values.group ?? entry.values.category ?? entry.values.namespace;
+  return typeof value === "string" && value.trim() ? value.trim() : "未分组";
+}
+
+function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
+  return {
+    ...template,
+    color: template.color || "#0f7c80",
+    description: template.description ?? "",
+    icon: templateIconName(template),
+    fields: template.fields.map((field) =>
+      field.id === "category"
+        ? {
+            ...field,
+            id: "group",
+            label: "分组",
+            type: "text",
+            required: false,
+            options: undefined,
+            placeholder: field.placeholder || "输入分组",
+          }
+        : field,
+    ),
+    markdownTemplate: template.markdownTemplate
+      .replace(/分类：\{\{\s*category\s*\}\}/g, "分组：{{group}}")
+      .replace(/\{\{\s*category\s*\}\}/g, "{{group}}"),
+  };
+}
+
+function normalizeEntry(entry: KnowledgeEntry): KnowledgeEntry {
+  if (entry.values.group !== undefined || entry.values.category === undefined) {
+    return entry;
+  }
+  return {
+    ...entry,
+    values: { ...entry.values, group: entry.values.category },
+  };
+}
+
 export default function App() {
   const [libraryDir, setLibraryDir] = useState("");
   const [templates, setTemplates] = useState<KnowledgeTemplate[]>([]);
@@ -200,6 +241,7 @@ export default function App() {
   const [selectedEntryId, setSelectedEntryId] = useState("");
   const [mode, setMode] = useState<PanelMode>("entry");
   const [query, setQuery] = useState("");
+  const [selectedGroup, setSelectedGroup] = useState("");
   const [draftTemplate, setDraftTemplate] = useState<KnowledgeTemplate>();
   const [status, setStatus] = useState<Status>();
   const [loading, setLoading] = useState(true);
@@ -224,6 +266,12 @@ export default function App() {
     })();
   }, []);
 
+  useEffect(() => {
+    const preventContextMenu = (event: MouseEvent) => event.preventDefault();
+    document.addEventListener("contextmenu", preventContextMenu);
+    return () => document.removeEventListener("contextmenu", preventContextMenu);
+  }, []);
+
   const selectedTemplate = useMemo(
     () =>
       templates.find((template) => template.id === selectedTemplateId) ??
@@ -246,20 +294,22 @@ export default function App() {
 
   const filteredEntries = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    if (!keyword || !selectedTemplate) return templateEntries;
-    return templateEntries.filter((entry) => {
+    if (!selectedTemplate) return [];
+    const grouped = selectedGroup
+      ? templateEntries.filter((entry) => entryGroup(entry) === selectedGroup)
+      : templateEntries;
+    if (!keyword) return grouped;
+    return grouped.filter((entry) => {
       const title = entryTitle(selectedTemplate, entry).toLowerCase();
       const values = JSON.stringify(entry.values).toLowerCase();
       return title.includes(keyword) || values.includes(keyword);
     });
-  }, [query, selectedTemplate, templateEntries]);
+  }, [query, selectedGroup, selectedTemplate, templateEntries]);
 
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const entry of templateEntries) {
-      const value =
-        entry.values.category ?? entry.values.group ?? entry.values.namespace;
-      const group = typeof value === "string" && value.trim() ? value : "未分组";
+      const group = entryGroup(entry);
       counts.set(group, (counts.get(group) ?? 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -272,7 +322,14 @@ export default function App() {
 
   useEffect(() => {
     if (selectedTemplate) setDraftTemplate(cloneTemplate(selectedTemplate));
+    setSelectedGroup("");
   }, [selectedTemplate]);
+
+  useEffect(() => {
+    if (selectedGroup && !groups.some(([group]) => group === selectedGroup)) {
+      setSelectedGroup("");
+    }
+  }, [groups, selectedGroup]);
 
   useEffect(() => {
     if (!libraryDir || templates.length === 0) {
@@ -306,31 +363,28 @@ export default function App() {
   async function refreshLibrary(dir: string) {
     setLoading(true);
     const state = await loadLibrary(dir);
-    let nextTemplates: KnowledgeTemplate[] = state.templates.map((template) => ({
-      ...template,
-      color: template.color || "#0f7c80",
-      description: template.description ?? "",
-      icon: templateIconName(template),
-    }));
+    let nextTemplates: KnowledgeTemplate[] =
+      state.templates.map(normalizeTemplate);
     if (!state.initialized && nextTemplates.length === 0) {
       const seeded = defaultTemplates.map((template) => ({
         ...cloneTemplate(template),
         icon: templateIconName(template),
         createdAt: nowIso(),
         updatedAt: nowIso(),
-      }));
+      })).map(normalizeTemplate);
       for (const template of seeded) {
         await saveTemplate(dir, template);
       }
       nextTemplates = seeded;
     }
-    setTemplates(nextTemplates);
-    setEntries(
-      state.entries.sort(
+    const nextEntries = state.entries
+      .map(normalizeEntry)
+      .sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-      ),
-    );
+      );
+    setTemplates(nextTemplates);
+    setEntries(nextEntries);
     const firstTemplate = nextTemplates[0];
     setSelectedTemplateId((current) =>
       nextTemplates.some((template) => template.id === current)
@@ -338,9 +392,9 @@ export default function App() {
         : firstTemplate?.id ?? "",
     );
     setSelectedEntryId((current) =>
-      state.entries.some((entry) => entry.id === current)
+      nextEntries.some((entry) => entry.id === current)
         ? current
-        : state.entries.find((entry) => entry.templateId === firstTemplate?.id)
+        : nextEntries.find((entry) => entry.templateId === firstTemplate?.id)
             ?.id ?? "",
     );
     setLoading(false);
@@ -371,11 +425,18 @@ export default function App() {
   async function handleNewEntry() {
     if (!selectedTemplate || !libraryDir) return;
     const createdAt = nowIso();
+    const values = valuesFromTemplate(selectedTemplate);
+    if (
+      selectedGroup &&
+      selectedTemplate.fields.some((field) => field.id === "group")
+    ) {
+      values.group = selectedGroup;
+    }
     const entry: KnowledgeEntry = {
       id: makeId("entry"),
       templateId: selectedTemplate.id,
       title: "未命名知识",
-      values: valuesFromTemplate(selectedTemplate),
+      values,
       createdAt,
       updatedAt: createdAt,
     };
@@ -696,15 +757,18 @@ export default function App() {
 
       <div className={`app-body ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
-        <section className="sidebar-section">
+        <div className="sidebar-main">
+        <section className="sidebar-section type-section">
           <div className="section-title">
             <span>知识类型</span>
             <button
+              className="text-action"
               disabled={!hasLibrary}
               title="新增知识类型"
               onClick={createTemplateDraft}
             >
               <Plus size={16} />
+              新增类型
             </button>
           </div>
           {templates.map((template) => (
@@ -741,16 +805,32 @@ export default function App() {
             <span>分组</span>
           </div>
           {groups.length ? (
-            groups.map(([group, count]) => (
-              <div className="group-row" key={group}>
+            <>
+            <button
+              className={`group-row ${selectedGroup === "" ? "active" : ""}`}
+              onClick={() => setSelectedGroup("")}
+            >
+              <span>全部</span>
+              <em>{templateEntries.length}</em>
+            </button>
+            {groups.map(([group, count]) => (
+              <button
+                className={`group-row ${
+                  selectedGroup === group ? "active" : ""
+                }`}
+                key={group}
+                onClick={() => setSelectedGroup(group)}
+              >
                 <span>{group}</span>
                 <em>{count}</em>
-              </div>
-            ))
+              </button>
+            ))}
+            </>
           ) : (
             <p className="muted">还没有分组。</p>
           )}
         </section>
+        </div>
 
         <div className="library-card">
           <div>
@@ -779,8 +859,18 @@ export default function App() {
         </label>
 
         <div className="list-meta">
-          <span>共 {filteredEntries.length} 个条目</span>
-          <span>最近编辑</span>
+          <div>
+            <span>共 {filteredEntries.length} 个条目</span>
+            {selectedGroup && <small>当前分组：{selectedGroup}</small>}
+          </div>
+          <button
+            className="list-new-button"
+            disabled={!hasLibrary || !selectedTemplate}
+            onClick={handleNewEntry}
+          >
+            <Plus size={16} />
+            新建知识
+          </button>
         </div>
 
         <div className="entry-list">
@@ -791,10 +881,7 @@ export default function App() {
             </button>
           )}
           {hasLibrary && filteredEntries.length === 0 && (
-            <button className="empty-action" onClick={handleNewEntry}>
-              <Plus size={22} />
-              新建第一条知识
-            </button>
+            <div className="empty-note">当前没有知识。</div>
           )}
           {filteredEntries.map((entry) => (
             <button
@@ -821,7 +908,7 @@ export default function App() {
                   {selectedTemplate ? entryTitle(selectedTemplate, entry) : entry.title}
                 </strong>
                 <span>
-                  {String(entry.values.namespace ?? entry.values.group ?? "未分组")}
+                  {entryGroup(entry)}
                 </span>
                 <small>更新于 {formatDate(entry.updatedAt)}</small>
               </div>
