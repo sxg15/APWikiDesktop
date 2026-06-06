@@ -99,8 +99,9 @@ export function renderMarkdownTemplate(
 ) {
   const byId = new Map(template.fields.map((field) => [field.id, field]));
   const byLabel = new Map(template.fields.map((field) => [field.label, field]));
+  const richImageFields = template.fields.filter(isRichImageField);
 
-  return template.markdownTemplate.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => {
+  const rendered = template.markdownTemplate.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => {
     const normalized = String(key).trim();
     if (normalized === "title") return entryTitle(template, entry);
     if (normalized === "templateName") return template.name;
@@ -111,6 +112,11 @@ export function renderMarkdownTemplate(
     if (!field) return "";
     return formatValue(field, entry.values[field.id], entry);
   });
+  const missingRichImages = richImageFields
+    .filter((field) => !templateUsesField(template.markdownTemplate, field))
+    .map((field) => formatValue(field, entry.values[field.id], entry))
+    .filter(Boolean);
+  return insertAfterFirstHeading(rendered, missingRichImages.join("\n\n"));
 }
 
 export function formatDate(value: string) {
@@ -158,6 +164,32 @@ function formatRichImage(
   return `\n\n:::ap-rich-image\n${JSON.stringify(payload)}\n:::\n\n`;
 }
 
+function isRichImageField(field: FieldDefinition) {
+  return (
+    field.type === "richImage" ||
+    field.type === "image" ||
+    field.type === "frameSequence"
+  );
+}
+
+function templateUsesField(markdownTemplate: string, field: FieldDefinition) {
+  return new RegExp(`\\{\\{\\s*${escapeRegExp(field.id)}\\s*\\}\\}`).test(
+    markdownTemplate,
+  ) || new RegExp(`\\{\\{\\s*${escapeRegExp(field.label)}\\s*\\}\\}`).test(
+    markdownTemplate,
+  );
+}
+
+function insertAfterFirstHeading(markdown: string, insert: string) {
+  const normalizedInsert = insert.trim();
+  if (!normalizedInsert) return markdown;
+  const heading = markdown.match(/^(#{1,6}\s+.+)(\r?\n|$)/);
+  if (!heading?.index && heading?.[0]) {
+    return `${heading[0]}\n${normalizedInsert}\n\n${markdown.slice(heading[0].length).trimStart()}`;
+  }
+  return `${normalizedInsert}\n\n${markdown}`;
+}
+
 function markdownAssetPath(value: string, entry: KnowledgeEntry) {
   if (/^(data:|blob:|https?:)/.test(value)) return value;
   const normalized = value.replace(/\\/g, "/");
@@ -198,6 +230,10 @@ function escapeTableCell(value: unknown) {
   return String(value ?? "")
     .replace(/\|/g, "\\|")
     .replace(/\n/g, "<br />");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function textFieldById(template: KnowledgeTemplate, fieldId?: string) {
