@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -8,6 +8,7 @@ import {
   Box,
   BookOpen,
   Boxes,
+  ChevronDown,
   CheckCircle2,
   CircleDot,
   Code2,
@@ -90,7 +91,7 @@ import type {
   ParameterRow,
 } from "./types";
 
-type PanelMode = "entry" | "template";
+type EntryView = "edit" | "preview";
 type SettingsTab = "library" | "language" | "layout" | "about";
 type Status = { tone: "ok" | "warn"; text: string } | undefined;
 
@@ -230,6 +231,23 @@ function entryGroup(entry: KnowledgeEntry) {
   return typeof value === "string" && value.trim() ? value.trim() : "未分组";
 }
 
+function hasMeaningfulValue(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => hasMeaningfulValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((item) => hasMeaningfulValue(item));
+  }
+  if (typeof value === "boolean") return value;
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function previewMayBeEmpty(template: KnowledgeTemplate, entry: KnowledgeEntry) {
+  return !template.fields.some((field) =>
+    hasMeaningfulValue(entry.values[field.id]),
+  );
+}
+
 function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
   const translations = template.translations
     ? Object.fromEntries(
@@ -316,10 +334,11 @@ export default function App() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [selectedEntryId, setSelectedEntryId] = useState("");
-  const [mode, setMode] = useState<PanelMode>("entry");
+  const [entryView, setEntryView] = useState<EntryView>("preview");
   const [query, setQuery] = useState("");
   const [selectedGroup, setSelectedGroup] = useState("");
   const [draftTemplate, setDraftTemplate] = useState<KnowledgeTemplate>();
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [status, setStatus] = useState<Status>();
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -501,6 +520,7 @@ export default function App() {
         : nextEntries.find((entry) => entry.templateId === firstTemplate?.id)
             ?.id ?? "",
     );
+    setEntryView("preview");
     setLoading(false);
   }
 
@@ -540,6 +560,22 @@ export default function App() {
     return iconSources[template.id] ?? "";
   }
 
+  function selectTemplate(templateId: string) {
+    setSelectedTemplateId(templateId);
+    setSelectedEntryId(
+      entries.find((entry) => entry.templateId === templateId)?.id ?? "",
+    );
+    setEntryView("preview");
+  }
+
+  function openTemplateEditor(template: KnowledgeTemplate) {
+    setSelectedTemplateId(template.id);
+    setDraftTemplate(
+      cloneTemplate(localizeTemplate(template, currentLanguage, fallbackLanguage)),
+    );
+    setTemplateEditorOpen(true);
+  }
+
   async function handleChooseLibrary() {
     const selected = await chooseLibraryDirectory();
     if (!selected) return;
@@ -576,7 +612,7 @@ export default function App() {
     await saveEntry(libraryDir, entry);
     setEntries((current) => [entry, ...current]);
     setSelectedEntryId(entry.id);
-    setMode("entry");
+    setEntryView("edit");
     setStatus({ tone: "ok", text: "已创建新知识。" });
   }
 
@@ -676,7 +712,7 @@ export default function App() {
       updatedAt: createdAt,
     };
     setDraftTemplate(template);
-    setMode("template");
+    setTemplateEditorOpen(true);
   }
 
   async function handleCopyTemplate() {
@@ -693,7 +729,10 @@ export default function App() {
     await saveTemplate(libraryDir, copied);
     setTemplates((current) => [...current, copied]);
     setSelectedTemplateId(copied.id);
-    setMode("template");
+    setDraftTemplate(
+      cloneTemplate(localizeTemplate(copied, currentLanguage, fallbackLanguage)),
+    );
+    setTemplateEditorOpen(true);
     setStatus({ tone: "ok", text: "知识类型已复制。" });
   }
 
@@ -731,6 +770,9 @@ export default function App() {
         : [...current, next];
     });
     setSelectedTemplateId(next.id);
+    setDraftTemplate(
+      cloneTemplate(localizeTemplate(next, currentLanguage, fallbackLanguage)),
+    );
     setStatus({ tone: "ok", text: "知识类型已保存。" });
   }
 
@@ -763,6 +805,7 @@ export default function App() {
     const existing = templates.find((template) => template.id === draftTemplate.id);
     if (!existing) {
       setDraftTemplate(selectedTemplate ? cloneTemplate(selectedTemplate) : undefined);
+      setTemplateEditorOpen(false);
       setStatus({ tone: "ok", text: "未保存的知识类型已取消。" });
       return;
     }
@@ -794,6 +837,7 @@ export default function App() {
       delete next[existing.id];
       return next;
     });
+    setTemplateEditorOpen(false);
     setStatus({ tone: "ok", text: "知识类型已删除。" });
   }
 
@@ -914,31 +958,33 @@ export default function App() {
               fallbackLanguage,
             );
             return (
-              <button
-                className={`type-button ${
-                  selectedTemplate?.id === template.id ? "active" : ""
-                }`}
-                key={template.id}
-                onClick={() => {
-                  setSelectedTemplateId(template.id);
-                  setSelectedEntryId(
-                    entries.find((entry) => entry.templateId === template.id)
-                      ?.id ?? "",
-                  );
-                  setMode("entry");
-                }}
-              >
-                <span className="type-icon" style={{ color: template.color }}>
-                  <TemplateIcon src={iconSrcForTemplate(template)} template={template} />
-                </span>
-                <span className="type-text">
-                  <span className="type-name">{visibleTemplate.name}</span>
-                  {visibleTemplate.description && (
-                    <small>{visibleTemplate.description}</small>
-                  )}
-                </span>
-                <em>{entries.filter((entry) => entry.templateId === template.id).length}</em>
-              </button>
+              <div className="type-row" key={template.id}>
+                <button
+                  className={`type-button ${
+                    selectedTemplate?.id === template.id ? "active" : ""
+                  }`}
+                  onClick={() => selectTemplate(template.id)}
+                >
+                  <span className="type-icon" style={{ color: template.color }}>
+                    <TemplateIcon src={iconSrcForTemplate(template)} template={template} />
+                  </span>
+                  <span className="type-text">
+                    <span className="type-name">{visibleTemplate.name}</span>
+                    {visibleTemplate.description && (
+                      <small>{visibleTemplate.description}</small>
+                    )}
+                  </span>
+                  <em>{entries.filter((entry) => entry.templateId === template.id).length}</em>
+                </button>
+                <button
+                  className="type-edit-button"
+                  disabled={!hasLibrary}
+                  onClick={() => openTemplateEditor(template)}
+                  title="编辑知识类型"
+                >
+                  <Wrench size={15} />
+                </button>
+              </div>
             );
           })}
         </section>
@@ -1025,7 +1071,7 @@ export default function App() {
               key={entry.id}
               onClick={() => {
                 setSelectedEntryId(entry.id);
-                setMode("entry");
+                setEntryView("preview");
               }}
             >
               <div
@@ -1053,18 +1099,22 @@ export default function App() {
 
       <section className="workspace">
         <div className="workspace-tabs">
-          <button
-            className={mode === "entry" ? "active" : ""}
-            onClick={() => setMode("entry")}
-          >
-            编辑器
-          </button>
-          <button
-            className={mode === "template" ? "active" : ""}
-            onClick={() => setMode("template")}
-          >
-            类型设置
-          </button>
+          {selectedTemplate && selectedEntry && (
+            <>
+              <button
+                className={entryView === "edit" ? "active" : ""}
+                onClick={() => setEntryView("edit")}
+              >
+                编辑
+              </button>
+              <button
+                className={entryView === "preview" ? "active" : ""}
+                onClick={() => setEntryView("preview")}
+              >
+                预览
+              </button>
+            </>
+          )}
           {status && (
             <div className={`status ${status.tone}`}>
               {status.tone === "ok" ? (
@@ -1080,36 +1130,37 @@ export default function App() {
           )}
         </div>
 
-        {mode === "template" ? (
-          <TemplateDesigner
-            draftTemplate={draftTemplate}
-            iconSrc={iconSrcForTemplate(draftTemplate)}
-            onAddField={addDraftField}
-            onClearIcon={handleClearTemplateIcon}
-            onCopyTemplate={handleCopyTemplate}
-            onDeleteTemplate={handleDeleteTemplate}
-            onMoveField={moveDraftField}
-            onRemoveField={removeDraftField}
-            onSaveTemplate={handleSaveTemplate}
-            onUploadIcon={handleUploadTemplateIcon}
-            onUpdateDraft={updateDraft}
-            onUpdateField={updateDraftField}
-          />
-        ) : (
-          <EntryEditor
-            entry={selectedEntry}
-            libraryDir={libraryDir}
-            markdown={previewMarkdown}
-            onDelete={handleDeleteEntry}
-            onExport={handleExportEntry}
-            onSave={handleSaveEntry}
-            onStatus={setStatus}
-            onUpdateValue={updateEntryValue}
-            template={selectedTemplate}
-          />
-        )}
+        <EntryEditor
+          entry={selectedEntry}
+          libraryDir={libraryDir}
+          markdown={previewMarkdown}
+          onDelete={handleDeleteEntry}
+          onEdit={() => setEntryView("edit")}
+          onExport={handleExportEntry}
+          onSave={handleSaveEntry}
+          onStatus={setStatus}
+          onUpdateValue={updateEntryValue}
+          template={selectedTemplate}
+          view={entryView}
+        />
       </section>
       </div>
+      <TemplateEditorDialog
+        draftTemplate={draftTemplate}
+        iconSrc={iconSrcForTemplate(draftTemplate)}
+        open={templateEditorOpen}
+        onAddField={addDraftField}
+        onClearIcon={handleClearTemplateIcon}
+        onClose={() => setTemplateEditorOpen(false)}
+        onCopyTemplate={handleCopyTemplate}
+        onDeleteTemplate={handleDeleteTemplate}
+        onMoveField={moveDraftField}
+        onRemoveField={removeDraftField}
+        onSaveTemplate={handleSaveTemplate}
+        onUploadIcon={handleUploadTemplateIcon}
+        onUpdateDraft={updateDraft}
+        onUpdateField={updateDraftField}
+      />
       <SettingsDialog
         activeTab={settingsTab}
         fallbackLanguage={fallbackLanguage}
@@ -1125,6 +1176,74 @@ export default function App() {
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
       />
     </main>
+  );
+}
+
+function TemplateEditorDialog({
+  draftTemplate,
+  iconSrc,
+  onAddField,
+  onClearIcon,
+  onClose,
+  onCopyTemplate,
+  onDeleteTemplate,
+  onMoveField,
+  onRemoveField,
+  onSaveTemplate,
+  onUploadIcon,
+  onUpdateDraft,
+  onUpdateField,
+  open,
+}: {
+  draftTemplate?: KnowledgeTemplate;
+  iconSrc: string;
+  onAddField: () => void;
+  onClearIcon: () => void;
+  onClose: () => void;
+  onCopyTemplate: () => void;
+  onDeleteTemplate: () => void;
+  onMoveField: (index: number, direction: -1 | 1) => void;
+  onRemoveField: (index: number) => void;
+  onSaveTemplate: () => void;
+  onUploadIcon: () => void;
+  onUpdateDraft: (patch: Partial<KnowledgeTemplate>) => void;
+  onUpdateField: (index: number, patch: Partial<FieldDefinition>) => void;
+  open: boolean;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="template-dialog-overlay">
+      <section
+        aria-label="编辑知识类型"
+        className="template-dialog"
+        role="dialog"
+      >
+        <div className="template-dialog-header">
+          <div>
+            <span>知识类型</span>
+            <strong>{draftTemplate?.name ?? "编辑知识类型"}</strong>
+          </div>
+          <button className="icon-button neutral" onClick={onClose} title="关闭">
+            <X size={18} />
+          </button>
+        </div>
+        <TemplateDesigner
+          draftTemplate={draftTemplate}
+          iconSrc={iconSrc}
+          onAddField={onAddField}
+          onClearIcon={onClearIcon}
+          onCopyTemplate={onCopyTemplate}
+          onDeleteTemplate={onDeleteTemplate}
+          onMoveField={onMoveField}
+          onRemoveField={onRemoveField}
+          onSaveTemplate={onSaveTemplate}
+          onUploadIcon={onUploadIcon}
+          onUpdateDraft={onUpdateDraft}
+          onUpdateField={onUpdateField}
+        />
+      </section>
+    </div>
   );
 }
 
@@ -1278,30 +1397,73 @@ function LanguageSelect({
   onChange: (language: LanguageCode) => void;
   value: LanguageCode;
 }) {
+  const [open, setOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
   const selectedLanguage =
     supportedLanguages.find((language) => language.code === value) ??
     supportedLanguages[0];
 
+  useEffect(() => {
+    if (!open) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
   return (
-    <label className="language-picker">
-      <span
-        aria-hidden="true"
-        className={`language-flag flag-${selectedLanguage.code}`}
-      />
-      <select
+    <div className="language-picker" ref={pickerRef}>
+      <button
         aria-label="当前语言"
-        value={value}
-        onChange={(event) =>
-          onChange(normalizeLanguage(event.target.value))
-        }
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className="language-select-button"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
       >
-        {supportedLanguages.map((language) => (
-          <option key={language.code} value={language.code}>
-            {language.label}
-          </option>
-        ))}
-      </select>
-    </label>
+        <span
+          aria-hidden="true"
+          className={`language-flag flag-${selectedLanguage.code}`}
+        />
+        <span className="language-current">{selectedLanguage.label}</span>
+        <ChevronDown size={16} />
+      </button>
+      {open && (
+        <div className="language-menu" role="listbox">
+          {supportedLanguages.map((language) => (
+            <button
+              aria-selected={language.code === value}
+              className={`language-option ${
+                language.code === value ? "active" : ""
+              }`}
+              key={language.code}
+              onClick={() => {
+                onChange(normalizeLanguage(language.code));
+                setOpen(false);
+              }}
+              role="option"
+              type="button"
+            >
+              <span
+                aria-hidden="true"
+                className={`language-flag flag-${language.code}`}
+              />
+              <span>{language.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1310,21 +1472,25 @@ function EntryEditor({
   libraryDir,
   markdown,
   onDelete,
+  onEdit,
   onExport,
   onSave,
   onStatus,
   onUpdateValue,
   template,
+  view,
 }: {
   entry?: KnowledgeEntry;
   libraryDir: string;
   markdown: string;
   onDelete: () => void;
+  onEdit: () => void;
   onExport: () => void;
   onSave: () => void;
   onStatus: (status: Status) => void;
   onUpdateValue: (fieldId: string, value: unknown) => void;
   template?: KnowledgeTemplate;
+  view: EntryView;
 }) {
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
 
@@ -1338,9 +1504,12 @@ function EntryEditor({
     );
   }
 
+  const maybeEmpty = previewMayBeEmpty(template, entry);
+
   return (
-    <div className="editor-grid">
-      <div className="form-panel">
+    <div className="entry-view">
+      {view === "edit" ? (
+      <div className="form-panel entry-panel">
         <div className="panel-heading">
           <div>
             <span>结构化内容</span>
@@ -1372,8 +1541,8 @@ function EntryEditor({
           ))}
         </div>
       </div>
-
-      <div className={`preview-panel ${previewFullscreen ? "fullscreen-preview" : ""}`}>
+      ) : (
+      <div className={`preview-panel entry-panel ${previewFullscreen ? "fullscreen-preview" : ""}`}>
         <div className="panel-heading">
           <div>
             <span>Markdown 预览</span>
@@ -1390,6 +1559,11 @@ function EntryEditor({
             </button>
           </div>
         </div>
+        {maybeEmpty && (
+          <button className="preview-empty-banner" onClick={onEdit}>
+            预览可能为空，点击去编辑。
+          </button>
+        )}
         <article className="markdown-preview">
           <ReactMarkdown
             components={{
@@ -1408,6 +1582,7 @@ function EntryEditor({
           </ReactMarkdown>
         </article>
       </div>
+      )}
     </div>
   );
 }

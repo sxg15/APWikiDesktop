@@ -207,17 +207,33 @@ textarea {
   width: 170px;
 }
 
-.language-picker select {
+.language-select-button {
+  display: flex;
+  width: 100%;
   height: 36px;
-  padding: 0 10px 0 46px;
+  align-items: center;
+  gap: 9px;
+  justify-content: flex-start;
+  padding: 0 10px;
+  background: var(--panel);
+}
+
+.language-select-button svg {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.language-current {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .language-flag {
-  position: absolute;
-  z-index: 1;
-  top: 50%;
-  left: 13px;
+  position: relative;
   display: block;
+  flex: 0 0 auto;
   width: 24px;
   height: 16px;
   overflow: hidden;
@@ -225,7 +241,47 @@ textarea {
   border-radius: 3px;
   box-shadow: 0 1px 2px rgba(20, 41, 48, 0.12);
   pointer-events: none;
-  transform: translateY(-50%);
+}
+
+.language-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  width: 220px;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 18px 42px rgba(15, 34, 40, 0.16);
+}
+
+.language-option {
+  display: flex;
+  width: 100%;
+  height: 36px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 10px;
+  border-color: transparent;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+}
+
+.language-option:hover,
+.language-option.active {
+  border-color: rgba(15, 124, 131, 0.14);
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+.language-option.active {
+  background: #dff1f2;
+  font-weight: 800;
 }
 
 .flag-zh {
@@ -395,6 +451,14 @@ textarea {
   font-size: 12px;
 }
 
+.type-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .type-button {
   position: relative;
   display: grid;
@@ -403,7 +467,6 @@ textarea {
   grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  margin-bottom: 6px;
   padding: 10px 12px;
   border: 1px solid transparent;
   text-align: left;
@@ -481,6 +544,23 @@ textarea {
 
 .type-button.active::before {
   background: var(--accent);
+}
+
+.type-edit-button {
+  display: grid;
+  width: 32px;
+  min-height: 56px;
+  place-items: center;
+  padding: 0;
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+}
+
+.type-edit-button:hover:not(:disabled) {
+  border-color: rgba(15, 124, 131, 0.14);
+  color: var(--accent-dark);
+  background: var(--accent-soft);
 }
 
 .groups {
@@ -782,6 +862,19 @@ textarea {
   overflow: hidden;
 }
 
+.entry-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.entry-panel {
+  width: 100%;
+  height: 100%;
+}
+
 .template-designer {
   overflow: auto;
 }
@@ -810,6 +903,20 @@ textarea {
 .preview-panel,
 .markdown-template-panel {
   background: #fcfdfd;
+}
+
+.preview-empty-banner {
+  display: flex;
+  width: calc(100% - 32px);
+  min-height: 44px;
+  align-items: center;
+  justify-content: flex-start;
+  margin: 16px 16px 0;
+  padding: 0 14px;
+  border: 1px dashed rgba(183, 124, 20, 0.38);
+  color: var(--warn);
+  background: #fff8ea;
+  text-align: left;
 }
 
 .fullscreen-preview {
@@ -1408,6 +1515,59 @@ textarea {
   padding: 12px;
   line-height: 1.6;
   resize: vertical;
+}
+
+.template-dialog-overlay {
+  position: fixed;
+  z-index: 36;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(24, 38, 42, 0.28);
+  backdrop-filter: blur(6px);
+}
+
+.template-dialog {
+  display: flex;
+  width: min(1240px, calc(100vw - 40px));
+  height: min(900px, calc(100vh - 40px));
+  min-height: 520px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: 0 24px 64px rgba(15, 34, 40, 0.22);
+}
+
+.template-dialog-header {
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfdfd;
+}
+
+.template-dialog-header span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.template-dialog-header strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 18px;
+}
+
+.template-dialog .template-designer {
+  flex: 1;
+  overflow: auto;
 }
 
 .settings-overlay {
