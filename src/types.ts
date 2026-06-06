@@ -9,6 +9,7 @@ export type FieldType =
   | "multiselect"
   | "tags"
   | "parameterTable"
+  | "richImage"
   | "image"
   | "frameSequence"
   | "markdown";
@@ -58,6 +59,15 @@ export interface ParameterRow {
   required: boolean;
   defaultValue: string;
   description: string;
+}
+
+export interface RichImageValue {
+  mode: "single" | "sequence";
+  frames: string[];
+  fps: number;
+  loop: boolean;
+  sampling: "point";
+  compression: "none";
 }
 
 export interface KnowledgeEntry {

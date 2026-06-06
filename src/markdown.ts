@@ -3,7 +3,13 @@ import type {
   KnowledgeEntry,
   KnowledgeTemplate,
   ParameterRow,
+  RichImageValue,
 } from "./types";
+import {
+  defaultRichImageValue,
+  normalizeRichImageValue,
+  richImageFramePaths,
+} from "./richImage";
 
 export function defaultValueForField(field: FieldDefinition): unknown {
   if (field.defaultValue !== undefined) return field.defaultValue;
@@ -11,10 +17,18 @@ export function defaultValueForField(field: FieldDefinition): unknown {
   if (field.type === "number") return 0;
   if (
     field.type === "multiselect" ||
-    field.type === "tags" ||
-    field.type === "frameSequence"
+    field.type === "tags"
   ) {
     return [];
+  }
+  if (
+    field.type === "richImage" ||
+    field.type === "image" ||
+    field.type === "frameSequence"
+  ) {
+    return defaultRichImageValue(
+      field.type === "frameSequence" ? "sequence" : "single",
+    );
   }
   if (field.type === "parameterTable") return [];
   return "";
@@ -58,19 +72,25 @@ export function entryIconAssetPaths(
   template: KnowledgeTemplate,
   entry: KnowledgeEntry,
 ) {
+  return entryIconRichImage(template, entry).frames;
+}
+
+export function entryIconRichImage(
+  template: KnowledgeTemplate,
+  entry: KnowledgeEntry,
+): RichImageValue {
   const field = template.fields.find(
     (item) =>
       item.id === template.iconFieldId &&
-      (item.type === "image" || item.type === "frameSequence"),
+      (item.type === "richImage" ||
+        item.type === "image" ||
+        item.type === "frameSequence"),
   );
-  if (!field) return [];
+  if (!field) return defaultRichImageValue("single");
   const value = entry.values[field.id];
-  if (field.type === "image") {
-    return typeof value === "string" && value ? [value] : [];
-  }
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (item): item is string => typeof item === "string" && Boolean(item),
+  return normalizeRichImageValue(
+    value,
+    field.type === "frameSequence" ? "sequence" : "single",
   );
 }
 
@@ -106,28 +126,30 @@ function formatValue(field: FieldDefinition, value: unknown, entry: KnowledgeEnt
   if (field.type === "tags" || field.type === "multiselect") {
     return Array.isArray(value) ? value.filter(Boolean).join("，") : "";
   }
-  if (field.type === "image") return formatImage(field.label, value, entry);
-  if (field.type === "frameSequence") {
-    return formatFrameSequence(field.label, value, entry);
+  if (
+    field.type === "richImage" ||
+    field.type === "image" ||
+    field.type === "frameSequence"
+  ) {
+    return formatRichImage(field.label, value, entry, field.type);
   }
   if (field.type === "boolean") return value ? "是" : "否";
   if (value === null || value === undefined) return "";
   return String(value);
 }
 
-function formatImage(label: string, value: unknown, entry: KnowledgeEntry) {
-  if (typeof value !== "string" || !value) return "";
-  return `![${escapeImageAlt(label)}](${markdownAssetPath(value, entry)})`;
-}
-
-function formatFrameSequence(
+function formatRichImage(
   label: string,
   value: unknown,
   entry: KnowledgeEntry,
+  fieldType: FieldDefinition["type"],
 ) {
-  const frames = Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && Boolean(item))
-    : [];
+  const frames =
+    fieldType === "richImage"
+      ? normalizeRichImageValue(value).frames
+      : fieldType === "frameSequence"
+        ? richImageFramePaths(Array.isArray(value) ? value : [])
+        : richImageFramePaths(typeof value === "string" ? value : "");
   if (!frames.length) return "";
   return frames
     .map(

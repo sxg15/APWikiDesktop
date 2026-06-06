@@ -77,13 +77,19 @@ import {
 } from "./localization";
 import {
   defaultValueForField,
-  entryIconAssetPaths,
+  entryIconRichImage,
   entryListDescription,
   entryTitle,
   formatDate,
   renderMarkdownTemplate,
   valuesFromTemplate,
 } from "./markdown";
+import {
+  defaultRichImageValue,
+  normalizeRichImageValue,
+  richImageFrameDelay,
+  richImageHasFrames,
+} from "./richImage";
 import type {
   FieldDefinition,
   FieldOption,
@@ -92,6 +98,7 @@ import type {
   KnowledgeTemplate,
   KnowledgeTemplateTranslation,
   ParameterRow,
+  RichImageValue,
 } from "./types";
 
 type EntryView = "edit" | "preview";
@@ -110,16 +117,29 @@ const fieldTypeLabels: Record<FieldType, string> = {
   multiselect: "多选",
   tags: "标签",
   parameterTable: "参数表",
-  image: "单帧图片",
-  frameSequence: "序列帧",
+  richImage: "富图片",
+  image: "富图片",
+  frameSequence: "富图片",
   markdown: "Markdown 文本",
 };
 
-const fieldTypes = Object.keys(fieldTypeLabels) as FieldType[];
+const fieldTypes: FieldType[] = [
+  "text",
+  "textarea",
+  "number",
+  "boolean",
+  "select",
+  "multiselect",
+  "tags",
+  "parameterTable",
+  "richImage",
+  "markdown",
+];
 const fieldsWithoutTextDefault = new Set<FieldType>([
   "parameterTable",
   "multiselect",
   "tags",
+  "richImage",
   "image",
   "frameSequence",
 ]);
@@ -198,10 +218,14 @@ function EntryListIcon({
 }) {
   const [entryIconFrames, setEntryIconFrames] = useState<string[]>([]);
   const [frameIndex, setFrameIndex] = useState(0);
-  const iconAssetPaths = useMemo(
-    () => (template ? entryIconAssetPaths(template, entry) : []),
+  const richImage = useMemo(
+    () =>
+      template
+        ? entryIconRichImage(template, entry)
+        : defaultRichImageValue("single"),
     [entry, template],
   );
+  const iconAssetPaths = richImage.frames;
   const iconAssetPathKey = iconAssetPaths.join("|");
 
   useEffect(() => {
@@ -230,12 +254,17 @@ function EntryListIcon({
   }, [iconAssetPathKey, iconAssetPaths, libraryDir]);
 
   useEffect(() => {
-    if (entryIconFrames.length <= 1) return;
+    if (entryIconFrames.length <= 1 || richImage.mode !== "sequence") return;
     const timer = window.setInterval(() => {
-      setFrameIndex((current) => (current + 1) % entryIconFrames.length);
-    }, 260);
+      setFrameIndex((current) => {
+        if (current >= entryIconFrames.length - 1) {
+          return richImage.loop ? 0 : current;
+        }
+        return current + 1;
+      });
+    }, richImageFrameDelay(richImage));
     return () => window.clearInterval(timer);
-  }, [entryIconFrames.length]);
+  }, [entryIconFrames.length, richImage]);
 
   const entryIconSrc =
     entryIconFrames.length > 0
@@ -291,6 +320,13 @@ function textToOptions(value: string): FieldOption[] {
 
 function requiredMissing(field: FieldDefinition, value: unknown) {
   if (!field.required) return false;
+  if (
+    field.type === "richImage" ||
+    field.type === "image" ||
+    field.type === "frameSequence"
+  ) {
+    return !richImageHasFrames(value);
+  }
   if (Array.isArray(value)) return value.length === 0;
   if (typeof value === "boolean") return false;
   return value === undefined || value === null || String(value).trim() === "";
@@ -307,6 +343,9 @@ function hasMeaningfulValue(value: unknown): boolean {
     return value.some((item) => hasMeaningfulValue(item));
   }
   if (value && typeof value === "object") {
+    if ("frames" in value && "sampling" in value && "compression" in value) {
+      return richImageHasFrames(value);
+    }
     return Object.values(value).some((item) => hasMeaningfulValue(item));
   }
   if (typeof value === "boolean") return value;
@@ -431,17 +470,31 @@ function normalizeFieldId(fieldId?: string) {
 }
 
 function normalizeField(field: FieldDefinition): FieldDefinition {
-  return field.id === "category"
-    ? {
-        ...field,
-        id: "group",
-        label: "分组",
-        type: "text",
-        required: false,
-        options: undefined,
-        placeholder: field.placeholder || "输入分组",
-      }
-    : field;
+  if (field.id === "category") {
+    return {
+      ...field,
+      id: "group",
+      label: "分组",
+      type: "text",
+      required: false,
+      options: undefined,
+      placeholder: field.placeholder || "输入分组",
+    };
+  }
+  if (field.type === "image" || field.type === "frameSequence") {
+    return {
+      ...field,
+      type: "richImage",
+      defaultValue:
+        field.defaultValue === undefined
+          ? undefined
+          : normalizeRichImageValue(
+              field.defaultValue,
+              field.type === "frameSequence" ? "sequence" : "single",
+            ),
+    };
+  }
+  return field;
 }
 
 function normalizeMarkdownTemplate(markdownTemplate: string) {
@@ -450,7 +503,7 @@ function normalizeMarkdownTemplate(markdownTemplate: string) {
       .replace(/\{\{\s*category\s*\}\}/g, "{{group}}");
 }
 
-function normalizeEntry(entry: KnowledgeEntry): KnowledgeEntry {
+function normalizeEntry(entry: KnowledgeEntry, template?: KnowledgeTemplate): KnowledgeEntry {
   const values = normalizeEntryValues(entry.values);
   const translations = entry.translations
     ? Object.fromEntries(
@@ -460,7 +513,7 @@ function normalizeEntry(entry: KnowledgeEntry): KnowledgeEntry {
             ? {
                 ...translation,
                 values: translation.values
-                  ? normalizeEntryValues(translation.values)
+                  ? normalizeEntryValues(translation.values, template)
                   : translation.values,
               }
             : translation,
@@ -469,16 +522,24 @@ function normalizeEntry(entry: KnowledgeEntry): KnowledgeEntry {
     : undefined;
   return {
     ...entry,
-    values,
+    values: normalizeEntryValues(values, template),
     translations: translations as KnowledgeEntry["translations"],
   };
 }
 
-function normalizeEntryValues(values: Record<string, unknown>) {
-  if (values.group !== undefined || values.category === undefined) {
-    return values;
+function normalizeEntryValues(
+  values: Record<string, unknown>,
+  template?: KnowledgeTemplate,
+) {
+  const next: Record<string, unknown> =
+    values.group !== undefined || values.category === undefined
+      ? { ...values }
+      : { ...values, group: values.category };
+  for (const field of template?.fields ?? []) {
+    if (field.type !== "richImage") continue;
+    next[field.id] = normalizeRichImageValue(next[field.id]);
   }
-  return { ...values, group: values.category };
+  return next;
 }
 
 export default function App() {
@@ -691,8 +752,11 @@ export default function App() {
       }
       nextTemplates = seeded;
     }
+    const templateById = new Map(
+      nextTemplates.map((template) => [template.id, template]),
+    );
     const nextEntries = state.entries
-      .map(normalizeEntry)
+      .map((entry) => normalizeEntry(entry, templateById.get(entry.templateId)))
       .sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
@@ -2187,9 +2251,13 @@ function FieldInput({
     );
   }
 
-  if (field.type === "image") {
+  if (
+    field.type === "richImage" ||
+    field.type === "image" ||
+    field.type === "frameSequence"
+  ) {
     return (
-      <ImageFieldInput
+      <RichImageInput
         entryId={entryId}
         field={field}
         label={label}
@@ -2197,26 +2265,10 @@ function FieldInput({
         onChange={onChange}
         onStatus={onStatus}
         templateId={templateId}
-        value={typeof value === "string" ? value : ""}
-      />
-    );
-  }
-
-  if (field.type === "frameSequence") {
-    return (
-      <FrameSequenceInput
-        entryId={entryId}
-        field={field}
-        label={label}
-        libraryDir={libraryDir}
-        onChange={onChange}
-        onStatus={onStatus}
-        templateId={templateId}
-        value={
-          Array.isArray(value)
-            ? value.filter((item): item is string => typeof item === "string")
-            : []
-        }
+        value={normalizeRichImageValue(
+          value,
+          field.type === "frameSequence" ? "sequence" : "single",
+        )}
       />
     );
   }
@@ -2238,7 +2290,7 @@ function FieldInput({
   );
 }
 
-function ImageFieldInput({
+function RichImageInput({
   entryId,
   field,
   label,
@@ -2252,106 +2304,22 @@ function ImageFieldInput({
   field: FieldDefinition;
   label: ReactNode;
   libraryDir: string;
-  onChange: (value: string) => void;
+  onChange: (value: RichImageValue) => void;
   onStatus: (status: Status) => void;
   templateId: string;
-  value: string;
-}) {
-  const [source, setSource] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      if (!value) {
-        setSource("");
-        return;
-      }
-      try {
-        const loaded = await loadLibraryAsset(libraryDir, value);
-        if (!cancelled) setSource(loaded);
-      } catch {
-        if (!cancelled) setSource("");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [libraryDir, value]);
-
-  async function handleUpload() {
-    try {
-      const imported = await importEntryImages(
-        libraryDir,
-        templateId,
-        entryId,
-        field.id,
-        false,
-      );
-      if (!imported[0]) return;
-      onChange(imported[0]);
-      onStatus({ tone: "ok", text: "图片已导入。" });
-    } catch (error) {
-      onStatus({ tone: "warn", text: `图片导入失败：${String(error)}` });
-    }
-  }
-
-  return (
-    <div className="form-field">
-      {label}
-      <div className="media-field">
-        <div className="media-preview image-preview">
-          {source ? (
-            <img alt={field.label} src={source} />
-          ) : (
-            <div className="media-empty">
-              <ImageIcon size={28} />
-              <span>未上传图片</span>
-            </div>
-          )}
-        </div>
-        <div className="media-actions">
-          <button disabled={!libraryDir} onClick={() => void handleUpload()}>
-            <Upload size={16} />
-            上传图片
-          </button>
-          <button disabled={!value} onClick={() => onChange("")}>
-            <X size={16} />
-            移除图片
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FrameSequenceInput({
-  entryId,
-  field,
-  label,
-  libraryDir,
-  onChange,
-  onStatus,
-  templateId,
-  value,
-}: {
-  entryId: string;
-  field: FieldDefinition;
-  label: ReactNode;
-  libraryDir: string;
-  onChange: (value: string[]) => void;
-  onStatus: (status: Status) => void;
-  templateId: string;
-  value: string[];
+  value: RichImageValue;
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [sources, setSources] = useState<string[]>([]);
+  const frames = value.frames;
+  const isSequence = value.mode === "sequence";
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const loaded = await Promise.all(
-        value.map(async (assetPath) => {
+        frames.map(async (assetPath) => {
           try {
             return await loadLibraryAsset(libraryDir, assetPath);
           } catch {
@@ -2364,44 +2332,80 @@ function FrameSequenceInput({
     return () => {
       cancelled = true;
     };
-  }, [libraryDir, value]);
+  }, [frames, libraryDir]);
 
   useEffect(() => {
-    if (currentIndex >= value.length) {
-      setCurrentIndex(Math.max(0, value.length - 1));
+    if (currentIndex >= frames.length) {
+      setCurrentIndex(Math.max(0, frames.length - 1));
     }
-    if (value.length < 2) setPlaying(false);
-  }, [currentIndex, value.length]);
+    if (frames.length < 2 || !isSequence) setPlaying(false);
+  }, [currentIndex, frames.length, isSequence]);
 
   useEffect(() => {
-    if (!playing || value.length < 2) return;
+    if (!playing || frames.length < 2 || !isSequence) return;
     const timer = window.setInterval(() => {
-      setCurrentIndex((index) => (index + 1) % value.length);
-    }, 120);
+      setCurrentIndex((index) => {
+        if (index >= frames.length - 1) {
+          if (!value.loop) {
+            setPlaying(false);
+            return index;
+          }
+          return 0;
+        }
+        return index + 1;
+      });
+    }, richImageFrameDelay(value));
     return () => window.clearInterval(timer);
-  }, [playing, value.length]);
+  }, [frames.length, isSequence, playing, value]);
 
-  async function handleUpload() {
+  function updateValue(patch: Partial<RichImageValue>) {
+    onChange({
+      ...value,
+      ...patch,
+      sampling: "point",
+      compression: "none",
+    });
+  }
+
+  function handleModeChange(mode: RichImageValue["mode"]) {
+    setPlaying(false);
+    setCurrentIndex(0);
+    updateValue({
+      mode,
+      frames: mode === "single" ? frames.slice(0, 1) : frames,
+    });
+  }
+
+  async function handleUpload(multiple: boolean) {
     try {
       const imported = await importEntryImages(
         libraryDir,
         templateId,
         entryId,
         field.id,
-        true,
+        multiple,
       );
       if (!imported.length) return;
-      onChange([...value, ...imported]);
-      setCurrentIndex(value.length);
-      onStatus({ tone: "ok", text: `已导入 ${imported.length} 张序列帧。` });
+      const nextFrames = multiple ? [...frames, ...imported] : [imported[0]];
+      updateValue({
+        mode: multiple ? "sequence" : "single",
+        frames: nextFrames,
+      });
+      setCurrentIndex(multiple ? frames.length : 0);
+      onStatus({
+        tone: "ok",
+        text: multiple
+          ? `已导入 ${imported.length} 张序列帧。`
+          : "图片已导入。",
+      });
     } catch (error) {
-      onStatus({ tone: "warn", text: `序列帧导入失败：${String(error)}` });
+      onStatus({ tone: "warn", text: `富图片导入失败：${String(error)}` });
     }
   }
 
   function removeFrame(index: number) {
-    const next = value.filter((_, frameIndex) => frameIndex !== index);
-    onChange(next);
+    const next = frames.filter((_, frameIndex) => frameIndex !== index);
+    updateValue({ frames: next });
     setCurrentIndex(Math.min(index, Math.max(0, next.length - 1)));
   }
 
@@ -2411,23 +2415,60 @@ function FrameSequenceInput({
     <div className="form-field">
       {label}
       <div className="media-field">
-        <div className="media-preview sequence-preview">
+        <div className="rich-image-settings">
+          <label>
+            类型
+            <select
+              value={value.mode}
+              onChange={(event) =>
+                handleModeChange(event.target.value as RichImageValue["mode"])
+              }
+            >
+              <option value="single">单帧图片</option>
+              <option value="sequence">序列帧</option>
+            </select>
+          </label>
+          <label>
+            播放速度
+            <input
+              disabled={!isSequence}
+              max={60}
+              min={1}
+              type="number"
+              value={value.fps}
+              onChange={(event) =>
+                updateValue({ fps: Number(event.target.value) })
+              }
+            />
+          </label>
+          <label className="check-row rich-image-loop">
+            <input
+              checked={value.loop}
+              disabled={!isSequence}
+              type="checkbox"
+              onChange={(event) => updateValue({ loop: event.target.checked })}
+            />
+            重播
+          </label>
+          <span>点采样 / 不压缩</span>
+        </div>
+        <div className="media-preview rich-image-preview">
           {currentSource ? (
             <img alt={`${field.label} ${currentIndex + 1}`} src={currentSource} />
           ) : (
             <div className="media-empty">
               <Images size={28} />
-              <span>未上传序列帧</span>
+              <span>未上传富图片</span>
             </div>
           )}
         </div>
         <div className="sequence-controls">
           <button
             className="sequence-step"
-            disabled={value.length < 2}
+            disabled={!isSequence || frames.length < 2}
             onClick={() =>
               setCurrentIndex((index) =>
-                index === 0 ? value.length - 1 : index - 1,
+                index === 0 ? frames.length - 1 : index - 1,
               )
             }
             title="上一帧"
@@ -2436,7 +2477,7 @@ function FrameSequenceInput({
           </button>
           <button
             className="sequence-step"
-            disabled={value.length < 2}
+            disabled={!isSequence || frames.length < 2}
             onClick={() => setPlaying((current) => !current)}
             title={playing ? "暂停" : "播放"}
           >
@@ -2444,29 +2485,34 @@ function FrameSequenceInput({
           </button>
           <button
             className="sequence-step"
-            disabled={value.length < 2}
-            onClick={() =>
-              setCurrentIndex((index) => (index + 1) % value.length)
-            }
+            disabled={!isSequence || frames.length < 2}
+            onClick={() => setCurrentIndex((index) => (index + 1) % frames.length)}
             title="下一帧"
           >
             <StepForward size={16} />
           </button>
           <span>
-            {value.length ? currentIndex + 1 : 0} / {value.length}
+            {frames.length ? currentIndex + 1 : 0} / {frames.length}
           </span>
-          <button disabled={!libraryDir} onClick={() => void handleUpload()}>
+          <button disabled={!libraryDir} onClick={() => void handleUpload(false)}>
+            <Upload size={16} />
+            上传单帧
+          </button>
+          <button disabled={!libraryDir} onClick={() => void handleUpload(true)}>
             <Upload size={16} />
             上传序列帧
           </button>
-          <button disabled={!value.length} onClick={() => onChange([])}>
+          <button
+            disabled={!frames.length}
+            onClick={() => updateValue({ frames: [] })}
+          >
             <X size={16} />
             清空
           </button>
         </div>
-        {value.length > 0 && (
+        {frames.length > 0 && (
           <div className="sequence-strip">
-            {value.map((assetPath, index) => (
+            {frames.map((assetPath, index) => (
               <div
                 className={index === currentIndex ? "active" : ""}
                 key={`${assetPath}-${index}`}
@@ -2618,7 +2664,7 @@ function TemplateDesigner({
   }
   const textFields = draftTemplate.fields.filter((field) => field.type === "text");
   const mediaFields = draftTemplate.fields.filter(
-    (field) => field.type === "image" || field.type === "frameSequence",
+    (field) => field.type === "richImage",
   );
   const titleFieldId = textFields.some(
     (field) => field.id === draftTemplate.titleFieldId,
@@ -2870,7 +2916,11 @@ function TemplateDesigner({
                   默认值
                   <input
                     disabled={fieldsWithoutTextDefault.has(field.type)}
-                    value={String(field.defaultValue ?? "")}
+                    value={
+                      fieldsWithoutTextDefault.has(field.type)
+                        ? ""
+                        : String(field.defaultValue ?? "")
+                    }
                     onChange={(event) =>
                       onUpdateField(index, { defaultValue: event.target.value })
                     }

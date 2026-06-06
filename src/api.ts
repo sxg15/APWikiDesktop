@@ -77,7 +77,7 @@ export async function importEntryImages(
         },
       ],
       multiple,
-      title: multiple ? "选择序列帧图片" : "选择图片",
+      title: multiple ? "选择富图片序列帧" : "选择富图片单帧",
     });
     const sourcePaths = Array.isArray(selected)
       ? selected
