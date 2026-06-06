@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -43,6 +50,8 @@ import {
   Upload,
   Wrench,
   X,
+  ZoomIn,
+  ZoomOut,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -90,6 +99,7 @@ import {
   richImageFrameDelay,
   richImageHasFrames,
 } from "./richImage";
+import { parseRichImageMarkdown } from "./richImageMarkdown";
 import type {
   FieldDefinition,
   FieldOption,
@@ -1973,6 +1983,21 @@ function EntryEditor({
   view: EntryView;
 }) {
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
+  const markdownSegments = useMemo(
+    () => parseRichImageMarkdown(markdown),
+    [markdown],
+  );
+
+  useEffect(() => {
+    if (!previewFullscreen) return undefined;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setPreviewFullscreen(false);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewFullscreen]);
 
   if (!template || !entry) {
     return (
@@ -2043,7 +2068,10 @@ function EntryEditor({
               <Download size={16} />
               导出 MD
             </button>
-            <button onClick={() => setPreviewFullscreen((current) => !current)}>
+            <button
+              className={previewFullscreen ? "fullscreen-exit-button" : undefined}
+              onClick={() => setPreviewFullscreen((current) => !current)}
+            >
               {previewFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               {previewFullscreen ? "退出全屏" : "全屏显示"}
             </button>
@@ -2055,21 +2083,34 @@ function EntryEditor({
           </button>
         )}
         <article className="markdown-preview">
-          <ReactMarkdown
-            components={{
-              img: ({ alt, src }) => (
-                <MarkdownPreviewImage
-                  alt={alt ?? ""}
-                  entry={entry}
-                  libraryDir={libraryDir}
-                  src={src}
-                />
-              ),
-            }}
-            remarkPlugins={[remarkGfm]}
-          >
-            {markdown}
-          </ReactMarkdown>
+          {markdownSegments.map((segment, index) =>
+            segment.type === "richImage" ? (
+              <MarkdownRichImage
+                alt={segment.alt}
+                entry={entry}
+                key={`rich-image-${index}`}
+                libraryDir={libraryDir}
+                value={segment.value}
+              />
+            ) : (
+              <ReactMarkdown
+                components={{
+                  img: ({ alt, src }) => (
+                    <MarkdownPreviewImage
+                      alt={alt ?? ""}
+                      entry={entry}
+                      libraryDir={libraryDir}
+                      src={src}
+                    />
+                  ),
+                }}
+                key={`markdown-${index}`}
+                remarkPlugins={[remarkGfm]}
+              >
+                {segment.content}
+              </ReactMarkdown>
+            ),
+          )}
         </article>
       </div>
       )}
@@ -2088,36 +2129,115 @@ function MarkdownPreviewImage({
   libraryDir: string;
   src?: string;
 }) {
-  const [imageSrc, setImageSrc] = useState(src ?? "");
+  const value = useMemo(() => normalizeRichImageValue(src ?? ""), [src]);
+
+  return (
+    <MarkdownRichImage
+      alt={alt}
+      entry={entry}
+      libraryDir={libraryDir}
+      showCaption={false}
+      value={value}
+    />
+  );
+}
+
+function MarkdownRichImage({
+  alt,
+  entry,
+  libraryDir,
+  showCaption = true,
+  value,
+}: {
+  alt: string;
+  entry: KnowledgeEntry;
+  libraryDir: string;
+  showCaption?: boolean;
+  value: RichImageValue;
+}) {
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [stopped, setStopped] = useState(false);
+  const [sources, setSources] = useState<string[]>([]);
+  const frames = value.frames;
+  const framesKey = frames.join("|");
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (!src) {
-        setImageSrc("");
+      if (!frames.length) {
+        setSources([]);
         return;
       }
-      if (/^(data:|blob:|https?:)/.test(src)) {
-        setImageSrc(src);
-        return;
-      }
-      const normalized = src.replace(/\\/g, "/");
-      const assetPath = normalized.startsWith("assets/")
-        ? `entries/${entry.templateId}/${entry.id}/${normalized}`
-        : normalized.replace(/^(\.\.\/)+/, "");
-      try {
-        const loaded = await loadLibraryAsset(libraryDir, assetPath);
-        if (!cancelled) setImageSrc(loaded);
-      } catch {
-        if (!cancelled) setImageSrc(src);
-      }
+      const loaded = await Promise.all(
+        frames.map(async (frame) => {
+          const assetPath = resolveMarkdownAssetPath(frame, entry);
+          try {
+            return await loadLibraryAsset(libraryDir, assetPath);
+          } catch {
+            return frame;
+          }
+        }),
+      );
+      if (!cancelled) setSources(loaded);
     })();
     return () => {
       cancelled = true;
     };
-  }, [entry.id, entry.templateId, libraryDir, src]);
+  }, [entry, frames, libraryDir]);
 
-  return imageSrc ? <img alt={alt} src={imageSrc} /> : null;
+  useEffect(() => {
+    setFrameIndex(0);
+    setStopped(false);
+  }, [framesKey, value.fps, value.loop, value.mode]);
+
+  useEffect(() => {
+    if (
+      stopped ||
+      value.mode !== "sequence" ||
+      sources.length < 2
+    ) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      setFrameIndex((current) => {
+        if (current >= sources.length - 1) {
+          if (!value.loop) {
+            setStopped(true);
+            return current;
+          }
+          return 0;
+        }
+        return current + 1;
+      });
+    }, richImageFrameDelay(value));
+    return () => window.clearInterval(timer);
+  }, [sources.length, stopped, value]);
+
+  const imageSrc = sources[frameIndex] ?? "";
+  if (!imageSrc) return null;
+
+  return (
+    <figure className="markdown-rich-image">
+      <div className="markdown-rich-image-stage">
+        <img alt={alt} src={imageSrc} />
+      </div>
+      {showCaption && value.mode === "sequence" && sources.length > 1 && (
+        <figcaption>
+          {frameIndex + 1} / {sources.length} · {value.fps} FPS ·{" "}
+          {value.loop ? "重播" : "不重播"}
+        </figcaption>
+      )}
+    </figure>
+  );
+}
+
+function resolveMarkdownAssetPath(src: string, entry: KnowledgeEntry) {
+  if (/^(data:|blob:|https?:)/.test(src)) return src;
+  const normalized = src.replace(/\\/g, "/");
+  if (normalized.startsWith("assets/")) {
+    return `entries/${entry.templateId}/${entry.id}/${normalized}`;
+  }
+  return normalized.replace(/^(\.\.\/)+/, "");
 }
 
 function FieldInput({
@@ -2310,10 +2430,16 @@ function RichImageInput({
   value: RichImageValue;
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [fitPreview, setFitPreview] = useState(true);
   const [playing, setPlaying] = useState(false);
+  const [previewScale, setPreviewScale] = useState(1);
   const [sources, setSources] = useState<string[]>([]);
   const frames = value.frames;
   const isSequence = value.mode === "sequence";
+  const previewScalePercent = Math.round(previewScale * 100);
+  const previewStyle = {
+    "--rich-image-scale": String(previewScale),
+  } as CSSProperties;
 
   useEffect(() => {
     let cancelled = false;
@@ -2409,6 +2535,13 @@ function RichImageInput({
     setCurrentIndex(Math.min(index, Math.max(0, next.length - 1)));
   }
 
+  function zoomPreview(delta: number) {
+    setFitPreview(false);
+    setPreviewScale((current) =>
+      Math.min(4, Math.max(0.25, Number((current + delta).toFixed(2)))),
+    );
+  }
+
   const currentSource = sources[currentIndex] ?? "";
 
   return (
@@ -2452,7 +2585,34 @@ function RichImageInput({
           </label>
           <span>点采样 / 不压缩</span>
         </div>
-        <div className="media-preview rich-image-preview">
+        <div className="rich-image-toolbar">
+          <button onClick={() => zoomPreview(-0.25)} title="缩小">
+            <ZoomOut size={16} />
+            缩小
+          </button>
+          <span>{fitPreview ? "适应窗口" : `${previewScalePercent}%`}</span>
+          <button onClick={() => zoomPreview(0.25)} title="放大">
+            <ZoomIn size={16} />
+            放大
+          </button>
+          <button
+            className={fitPreview ? "active" : ""}
+            onClick={() => {
+              setFitPreview(true);
+              setPreviewScale(1);
+            }}
+            title="适应窗口"
+          >
+            <Maximize2 size={16} />
+            适应窗口
+          </button>
+        </div>
+        <div
+          className={`media-preview rich-image-preview ${
+            fitPreview ? "fit-preview" : "scaled-preview"
+          }`}
+          style={previewStyle}
+        >
           {currentSource ? (
             <img alt={`${field.label} ${currentIndex + 1}`} src={currentSource} />
           ) : (

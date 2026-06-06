@@ -962,11 +962,20 @@ textarea {
 .preview-panel {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
   box-shadow: var(--shadow);
+}
+
+.form-panel {
+  overflow: auto;
+}
+
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .designer-panel {
@@ -1000,9 +1009,22 @@ textarea {
 
 .fullscreen-preview {
   position: fixed;
-  z-index: 30;
-  inset: 14px;
-  overflow: auto;
+  z-index: 1000;
+  inset: 56px 0 0;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+.fullscreen-preview .panel-heading {
+  padding-right: 150px;
+}
+
+.fullscreen-exit-button {
+  position: fixed;
+  z-index: 1001;
+  top: 68px;
+  right: 14px;
+  box-shadow: 0 14px 34px rgba(16, 35, 42, 0.2);
 }
 
 .panel-heading {
@@ -1270,6 +1292,34 @@ textarea {
   gap: 8px;
 }
 
+.rich-image-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rich-image-toolbar span {
+  display: inline-flex;
+  min-width: 76px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+  background: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rich-image-toolbar button.active {
+  border-color: rgba(15, 126, 132, 0.32);
+  color: var(--accent-dark);
+  background: #e6f6f6;
+}
+
 .rich-image-settings {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) 104px auto auto;
@@ -1313,6 +1363,25 @@ textarea {
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.rich-image-preview {
+  position: relative;
+  overflow: auto;
+}
+
+.rich-image-preview.fit-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.rich-image-preview.scaled-preview img {
+  width: calc(100% * var(--rich-image-scale));
+  height: calc(100% * var(--rich-image-scale));
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
 }
 
 .media-actions button,
@@ -1402,6 +1471,9 @@ textarea {
 }
 
 .markdown-preview {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
   padding: 22px 24px 44px;
   color: var(--text);
   line-height: 1.72;
@@ -1431,6 +1503,39 @@ textarea {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #fff;
+}
+
+.markdown-rich-image {
+  margin: 14px 0 18px;
+}
+
+.markdown-rich-image-stage {
+  display: grid;
+  min-height: 180px;
+  max-height: 520px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.markdown-rich-image-stage img {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: 520px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  object-fit: contain;
+}
+
+.markdown-rich-image figcaption {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .markdown-preview table {

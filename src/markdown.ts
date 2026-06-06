@@ -8,7 +8,6 @@ import type {
 import {
   defaultRichImageValue,
   normalizeRichImageValue,
-  richImageFramePaths,
 } from "./richImage";
 
 export function defaultValueForField(field: FieldDefinition): unknown {
@@ -144,22 +143,19 @@ function formatRichImage(
   entry: KnowledgeEntry,
   fieldType: FieldDefinition["type"],
 ) {
-  const frames =
-    fieldType === "richImage"
-      ? normalizeRichImageValue(value).frames
-      : fieldType === "frameSequence"
-        ? richImageFramePaths(Array.isArray(value) ? value : [])
-        : richImageFramePaths(typeof value === "string" ? value : "");
-  if (!frames.length) return "";
-  return frames
-    .map(
-      (frame, index) =>
-        `![${escapeImageAlt(`${label} ${index + 1}`)}](${markdownAssetPath(
-          frame,
-          entry,
-        )})`,
-    )
-    .join("\n\n");
+  const richImage = normalizeRichImageValue(
+    value,
+    fieldType === "frameSequence" ? "sequence" : "single",
+  );
+  if (!richImage.frames.length) return "";
+  const payload: RichImageValue & { alt: string } = {
+    ...richImage,
+    alt: label,
+    frames: richImage.frames.map((frame) => markdownAssetPath(frame, entry)),
+    sampling: "point",
+    compression: "none",
+  };
+  return `\n\n:::ap-rich-image\n${JSON.stringify(payload)}\n:::\n\n`;
 }
 
 function markdownAssetPath(value: string, entry: KnowledgeEntry) {
@@ -170,10 +166,6 @@ function markdownAssetPath(value: string, entry: KnowledgeEntry) {
     return normalized.slice(entryPrefix.length);
   }
   return normalized.startsWith("assets/") ? `../../../${normalized}` : normalized;
-}
-
-function escapeImageAlt(value: string) {
-  return value.replace(/\]/g, "\\]");
 }
 
 function formatParameterTable(value: unknown) {
