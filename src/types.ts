@@ -28,6 +28,8 @@ export interface KnowledgeTemplate {
   id: string;
   name: string;
   description: string;
+  icon?: string;
+  iconImage?: string;
   color: string;
   fields: FieldDefinition[];
   markdownTemplate: string;
@@ -55,6 +57,7 @@ export interface KnowledgeEntry {
 export interface LibraryState {
   templates: KnowledgeTemplate[];
   entries: KnowledgeEntry[];
+  initialized?: boolean;
 }
 
 export interface AppSettings {

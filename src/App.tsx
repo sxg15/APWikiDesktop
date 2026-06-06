@@ -5,24 +5,37 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  Box,
   BookOpen,
+  Boxes,
   CheckCircle2,
+  CircleDot,
   Code2,
   Copy,
   Database,
   Download,
-  Edit3,
   FilePlus2,
+  FileText,
   FolderOpen,
+  Gamepad2,
+  Grid3x3,
+  Image as ImageIcon,
   Layers,
   LayoutTemplate,
+  ListTree,
   Menu,
   Plus,
+  Puzzle,
   Save,
   Search,
   Settings,
+  Sparkles,
+  ScrollText,
   Trash2,
+  Upload,
+  Wrench,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   chooseLibraryDirectory,
@@ -30,6 +43,8 @@ import {
   deleteTemplate,
   exportEntryMarkdown,
   getSettings,
+  importTemplateIcon,
+  loadTemplateIcon,
   loadLibrary,
   saveEntry,
   saveSettings,
@@ -69,6 +84,67 @@ const fieldTypeLabels: Record<FieldType, string> = {
 };
 
 const fieldTypes = Object.keys(fieldTypeLabels) as FieldType[];
+
+const templateIcons: Record<string, LucideIcon> = {
+  BookOpen,
+  Box,
+  Boxes,
+  CircleDot,
+  Code2,
+  Database,
+  FileText,
+  Gamepad2,
+  Grid3x3,
+  ImageIcon,
+  Layers,
+  ListTree,
+  Puzzle,
+  ScrollText,
+  Sparkles,
+  Wrench,
+};
+
+const templateIconOptions = [
+  { name: "BookOpen", label: "书本" },
+  { name: "Grid3x3", label: "网格" },
+  { name: "Code2", label: "代码" },
+  { name: "Database", label: "数据" },
+  { name: "FileText", label: "文档" },
+  { name: "Gamepad2", label: "游戏" },
+  { name: "Layers", label: "层级" },
+  { name: "ListTree", label: "列表" },
+  { name: "Puzzle", label: "拼图" },
+  { name: "ScrollText", label: "卷轴" },
+  { name: "Sparkles", label: "星光" },
+  { name: "Wrench", label: "工具" },
+  { name: "Box", label: "方块" },
+  { name: "Boxes", label: "方块组" },
+  { name: "CircleDot", label: "圆点" },
+  { name: "ImageIcon", label: "图片" },
+];
+
+function templateIconName(template?: Pick<KnowledgeTemplate, "icon" | "id">) {
+  if (template?.icon && templateIcons[template.icon]) return template.icon;
+  if (template?.id === "visual-method") return "Code2";
+  if (template?.id === "tile") return "Grid3x3";
+  return "BookOpen";
+}
+
+function TemplateIcon({
+  size = 18,
+  src,
+  template,
+}: {
+  size?: number;
+  src?: string;
+  template?: Pick<KnowledgeTemplate, "icon" | "id">;
+}) {
+  if (src) {
+    return <img alt="" className="template-icon-image" src={src} />;
+  }
+  const Icon = templateIcons[templateIconName(template)] ?? BookOpen;
+  return <Icon size={size} />;
+}
 
 function cloneTemplate(template: KnowledgeTemplate) {
   return JSON.parse(JSON.stringify(template)) as KnowledgeTemplate;
@@ -130,6 +206,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("library");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [iconSources, setIconSources] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void (async () => {
@@ -197,13 +274,48 @@ export default function App() {
     if (selectedTemplate) setDraftTemplate(cloneTemplate(selectedTemplate));
   }, [selectedTemplate]);
 
+  useEffect(() => {
+    if (!libraryDir || templates.length === 0) {
+      setIconSources({});
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const loaded = await Promise.all(
+        templates.map(async (template) => {
+          if (!template.iconImage) return [template.id, ""] as const;
+          try {
+            return [
+              template.id,
+              await loadTemplateIcon(libraryDir, template.iconImage),
+            ] as const;
+          } catch {
+            return [template.id, ""] as const;
+          }
+        }),
+      );
+      if (!cancelled) setIconSources(Object.fromEntries(loaded));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [libraryDir, templates]);
+
   async function refreshLibrary(dir: string) {
     setLoading(true);
     const state = await loadLibrary(dir);
-    let nextTemplates = state.templates;
-    if (nextTemplates.length === 0) {
+    let nextTemplates: KnowledgeTemplate[] = state.templates.map((template) => ({
+      ...template,
+      color: template.color || "#0f7c80",
+      description: template.description ?? "",
+      icon: templateIconName(template),
+    }));
+    if (!state.initialized && nextTemplates.length === 0) {
       const seeded = defaultTemplates.map((template) => ({
         ...cloneTemplate(template),
+        icon: templateIconName(template),
         createdAt: nowIso(),
         updatedAt: nowIso(),
       }));
@@ -237,6 +349,14 @@ export default function App() {
   function openSettings(tab: SettingsTab = "library") {
     setSettingsTab(tab);
     setSettingsOpen(true);
+  }
+
+  function iconSrcForTemplate(template?: KnowledgeTemplate) {
+    if (!template?.iconImage) return "";
+    if (/^(data:|blob:|https?:)/.test(template.iconImage)) {
+      return template.iconImage;
+    }
+    return iconSources[template.id] ?? "";
   }
 
   async function handleChooseLibrary() {
@@ -335,6 +455,7 @@ export default function App() {
       id: makeId("template"),
       name: "新知识类型",
       description: "描述这种知识的用途。",
+      icon: "BookOpen",
       color: "#4f6f52",
       fields: [
         {
@@ -354,11 +475,13 @@ export default function App() {
   }
 
   async function handleCopyTemplate() {
-    if (!selectedTemplate || !libraryDir) return;
+    const source = draftTemplate ?? selectedTemplate;
+    if (!source || !libraryDir) return;
     const copied = {
-      ...cloneTemplate(selectedTemplate),
+      ...cloneTemplate(source),
       id: makeId("template"),
-      name: `${selectedTemplate.name} 副本`,
+      name: `${source.name} 副本`,
+      icon: templateIconName(source),
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -366,7 +489,7 @@ export default function App() {
     setTemplates((current) => [...current, copied]);
     setSelectedTemplateId(copied.id);
     setMode("template");
-    setStatus({ tone: "ok", text: "模板已复制。" });
+    setStatus({ tone: "ok", text: "知识类型已复制。" });
   }
 
   async function handleSaveTemplate() {
@@ -376,7 +499,7 @@ export default function App() {
       (id, index) => fieldIds.indexOf(id) !== index,
     );
     if (!draftTemplate.name.trim()) {
-      setStatus({ tone: "warn", text: "模板名称不能为空。" });
+      setStatus({ tone: "warn", text: "类型名称不能为空。" });
       return;
     }
     if (fieldIds.some((id) => !id)) {
@@ -387,7 +510,11 @@ export default function App() {
       setStatus({ tone: "warn", text: `字段 ID 重复：${duplicate}` });
       return;
     }
-    const next = { ...draftTemplate, updatedAt: nowIso() };
+    const next = {
+      ...draftTemplate,
+      icon: templateIconName(draftTemplate),
+      updatedAt: nowIso(),
+    };
     await saveTemplate(libraryDir, next);
     setTemplates((current) => {
       const exists = current.some((template) => template.id === next.id);
@@ -396,23 +523,70 @@ export default function App() {
         : [...current, next];
     });
     setSelectedTemplateId(next.id);
-    setStatus({ tone: "ok", text: "模板已保存。" });
+    setStatus({ tone: "ok", text: "知识类型已保存。" });
+  }
+
+  async function handleUploadTemplateIcon() {
+    if (!draftTemplate || !libraryDir) return;
+    const iconImage = await importTemplateIcon(libraryDir, draftTemplate.id);
+    if (!iconImage) return;
+    setDraftTemplate((current) =>
+      current ? { ...current, iconImage, updatedAt: nowIso() } : current,
+    );
+    try {
+      const src = await loadTemplateIcon(libraryDir, iconImage);
+      setIconSources((current) => ({ ...current, [draftTemplate.id]: src }));
+    } catch {
+      setIconSources((current) => ({ ...current, [draftTemplate.id]: "" }));
+    }
+    setStatus({ tone: "ok", text: "图标图片已导入。" });
+  }
+
+  function handleClearTemplateIcon() {
+    if (!draftTemplate) return;
+    setDraftTemplate((current) =>
+      current ? { ...current, iconImage: "", updatedAt: nowIso() } : current,
+    );
+    setIconSources((current) => ({ ...current, [draftTemplate.id]: "" }));
   }
 
   async function handleDeleteTemplate() {
-    if (!libraryDir || !selectedTemplate) return;
-    if (entries.some((entry) => entry.templateId === selectedTemplate.id)) {
-      setStatus({ tone: "warn", text: "这个模板已有知识内容，不能删除。" });
+    if (!libraryDir || !draftTemplate) return;
+    const existing = templates.find((template) => template.id === draftTemplate.id);
+    if (!existing) {
+      setDraftTemplate(selectedTemplate ? cloneTemplate(selectedTemplate) : undefined);
+      setStatus({ tone: "ok", text: "未保存的知识类型已取消。" });
       return;
     }
-    if (!window.confirm("删除当前模板？")) return;
-    await deleteTemplate(libraryDir, selectedTemplate.id);
+    const relatedCount = entries.filter(
+      (entry) => entry.templateId === existing.id,
+    ).length;
+    const message = relatedCount
+      ? `删除这个知识类型？同时会删除 ${relatedCount} 条知识内容。`
+      : "删除这个知识类型？";
+    if (!window.confirm(message)) return;
+    await deleteTemplate(libraryDir, existing.id);
     const nextTemplates = templates.filter(
-      (template) => template.id !== selectedTemplate.id,
+      (template) => template.id !== existing.id,
+    );
+    const nextEntries = entries.filter(
+      (entry) => entry.templateId !== existing.id,
     );
     setTemplates(nextTemplates);
-    setSelectedTemplateId(nextTemplates[0]?.id ?? "");
-    setStatus({ tone: "ok", text: "模板已删除。" });
+    setEntries(nextEntries);
+    const nextSelectedTemplateId = nextTemplates[0]?.id ?? "";
+    setSelectedTemplateId(nextSelectedTemplateId);
+    setSelectedEntryId(
+      nextEntries.find((entry) => entry.templateId === nextSelectedTemplateId)
+        ?.id ?? "",
+    );
+    setDraftTemplate(nextTemplates[0] ? cloneTemplate(nextTemplates[0]) : undefined);
+    setIconSources((current) => {
+      const next = { ...current };
+      delete next[existing.id];
+      return next;
+    });
+    setStatus({ tone: "ok", text: "知识类型已删除。" });
   }
 
   function updateDraft(patch: Partial<KnowledgeTemplate>) {
@@ -510,7 +684,7 @@ export default function App() {
           </button>
           <button onClick={() => setMode("template")}>
             <LayoutTemplate size={18} />
-            模板
+            类型设置
           </button>
         </div>
 
@@ -523,7 +697,16 @@ export default function App() {
       <div className={`app-body ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <section className="sidebar-section">
-          <div className="section-title">知识类型</div>
+          <div className="section-title">
+            <span>知识类型</span>
+            <button
+              disabled={!hasLibrary}
+              title="新增知识类型"
+              onClick={createTemplateDraft}
+            >
+              <Plus size={16} />
+            </button>
+          </div>
           {templates.map((template) => (
             <button
               className={`type-button ${
@@ -539,8 +722,15 @@ export default function App() {
                 setMode("entry");
               }}
             >
-              {template.id === "visual-method" ? <Code2 /> : <Layers />}
-              <span>{template.name}</span>
+              <span className="type-icon" style={{ color: template.color }}>
+                <TemplateIcon src={iconSrcForTemplate(template)} template={template} />
+              </span>
+              <span className="type-text">
+                <span className="type-name">{template.name}</span>
+                {template.description && (
+                  <small>{template.description}</small>
+                )}
+              </span>
               <em>{entries.filter((entry) => entry.templateId === template.id).length}</em>
             </button>
           ))}
@@ -549,9 +739,6 @@ export default function App() {
         <section className="sidebar-section groups">
           <div className="section-title">
             <span>分组</span>
-            <button title="新建模板" onClick={createTemplateDraft}>
-              <Plus size={16} />
-            </button>
           </div>
           {groups.length ? (
             groups.map(([group, count]) => (
@@ -624,7 +811,10 @@ export default function App() {
                 className="entry-icon"
                 style={{ background: selectedTemplate?.color }}
               >
-                {selectedTemplate?.id === "visual-method" ? <Code2 /> : <BookOpen />}
+                <TemplateIcon
+                  src={iconSrcForTemplate(selectedTemplate)}
+                  template={selectedTemplate}
+                />
               </div>
               <div>
                 <strong>
@@ -652,7 +842,7 @@ export default function App() {
             className={mode === "template" ? "active" : ""}
             onClick={() => setMode("template")}
           >
-            模板设计器
+            类型设置
           </button>
           {status && (
             <div className={`status ${status.tone}`}>
@@ -672,12 +862,15 @@ export default function App() {
         {mode === "template" ? (
           <TemplateDesigner
             draftTemplate={draftTemplate}
+            iconSrc={iconSrcForTemplate(draftTemplate)}
             onAddField={addDraftField}
+            onClearIcon={handleClearTemplateIcon}
             onCopyTemplate={handleCopyTemplate}
             onDeleteTemplate={handleDeleteTemplate}
             onMoveField={moveDraftField}
             onRemoveField={removeDraftField}
             onSaveTemplate={handleSaveTemplate}
+            onUploadIcon={handleUploadTemplateIcon}
             onUpdateDraft={updateDraft}
             onUpdateField={updateDraftField}
           />
@@ -787,7 +980,7 @@ function SettingsDialog({
                   </button>
                 </div>
                 <div className="setting-note">
-                  模板、知识内容和导出的 Markdown 会保存在这个目录。
+                  知识类型、知识内容、图标图片和导出的 Markdown 会保存在这个目录。
                 </div>
               </div>
             )}
@@ -810,7 +1003,7 @@ function SettingsDialog({
             {activeTab === "about" && (
               <div className="settings-page about-page">
                 <strong>AP Wiki</strong>
-                <span>本地知识库原型，当前版本用于手动维护模板和知识条目。</span>
+                <span>本地知识库原型，当前版本用于手动维护知识类型和知识条目。</span>
               </div>
             )}
           </div>
@@ -1111,22 +1304,28 @@ function ParameterTableInput({
 
 function TemplateDesigner({
   draftTemplate,
+  iconSrc,
   onAddField,
+  onClearIcon,
   onCopyTemplate,
   onDeleteTemplate,
   onMoveField,
   onRemoveField,
   onSaveTemplate,
+  onUploadIcon,
   onUpdateDraft,
   onUpdateField,
 }: {
   draftTemplate?: KnowledgeTemplate;
+  iconSrc: string;
   onAddField: () => void;
+  onClearIcon: () => void;
   onCopyTemplate: () => void;
   onDeleteTemplate: () => void;
   onMoveField: (index: number, direction: -1 | 1) => void;
   onRemoveField: (index: number) => void;
   onSaveTemplate: () => void;
+  onUploadIcon: () => void;
   onUpdateDraft: (patch: Partial<KnowledgeTemplate>) => void;
   onUpdateField: (index: number, patch: Partial<FieldDefinition>) => void;
 }) {
@@ -1134,7 +1333,7 @@ function TemplateDesigner({
     return (
       <div className="workspace-empty">
         <LayoutTemplate size={34} />
-        <h2>选择模板后开始设计</h2>
+        <h2>选择知识类型后开始设置</h2>
       </div>
     );
   }
@@ -1144,7 +1343,7 @@ function TemplateDesigner({
       <div className="designer-panel">
         <div className="panel-heading">
           <div>
-            <span>模板</span>
+            <span>知识类型</span>
             <strong>{draftTemplate.name}</strong>
           </div>
           <div className="button-row">
@@ -1154,7 +1353,7 @@ function TemplateDesigner({
             </button>
             <button onClick={onSaveTemplate}>
               <Save size={16} />
-              保存模板
+              保存类型
             </button>
             <button className="danger-ghost" onClick={onDeleteTemplate}>
               <Trash2 size={16} />
@@ -1165,7 +1364,7 @@ function TemplateDesigner({
 
         <div className="template-meta-grid">
           <label>
-            模板名称
+            类型名称
             <input
               value={draftTemplate.name}
               onChange={(event) => onUpdateDraft({ name: event.target.value })}
@@ -1176,6 +1375,19 @@ function TemplateDesigner({
             <input disabled value={draftTemplate.id} />
           </label>
           <label>
+            默认图标
+            <select
+              value={templateIconName(draftTemplate)}
+              onChange={(event) => onUpdateDraft({ icon: event.target.value })}
+            >
+              {templateIconOptions.map((option) => (
+                <option key={option.name} value={option.name}>
+                  {option.label} / {option.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             颜色
             <input
               type="color"
@@ -1184,7 +1396,7 @@ function TemplateDesigner({
             />
           </label>
           <label className="wide">
-            描述
+            简介
             <input
               value={draftTemplate.description}
               onChange={(event) =>
@@ -1192,6 +1404,35 @@ function TemplateDesigner({
               }
             />
           </label>
+          <div className="template-icon-editor wide">
+            <div
+              className="template-icon-preview"
+              style={{ background: draftTemplate.color }}
+            >
+              <TemplateIcon
+                size={24}
+                src={iconSrc}
+                template={draftTemplate}
+              />
+            </div>
+            <div className="template-icon-controls">
+              <strong>图标图片</strong>
+              <div className="button-row">
+                <button onClick={onUploadIcon}>
+                  <Upload size={16} />
+                  上传图片
+                </button>
+                <button
+                  disabled={!draftTemplate.iconImage}
+                  onClick={onClearIcon}
+                >
+                  <X size={16} />
+                  移除图片
+                </button>
+              </div>
+            </div>
+            <span>{draftTemplate.iconImage ? "已上传图片" : "未上传图片"}</span>
+          </div>
         </div>
 
         <div className="field-designer-header">
@@ -1325,7 +1566,7 @@ function TemplateDesigner({
       <div className="designer-panel markdown-template-panel">
         <div className="panel-heading">
           <div>
-            <span>Markdown 查看模板</span>
+            <span>Markdown 查看样式</span>
             <strong>占位符会被知识内容替换</strong>
           </div>
         </div>

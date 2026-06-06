@@ -78,6 +78,7 @@ export const defaultTemplates: KnowledgeTemplate[] = [
     id: "tile",
     name: "瓦片",
     description: "游戏瓦片、行为瓦片和可配置瓦片的结构化资料。",
+    icon: "Grid3x3",
     color: "#0f7c80",
     fields: parameterFields(),
     markdownTemplate: [
@@ -118,6 +119,7 @@ export const defaultTemplates: KnowledgeTemplate[] = [
     id: "visual-method",
     name: "可视化方法",
     description: "可视化方法代码块、参数、返回值和示例。",
+    icon: "Code2",
     color: "#3769a6",
     fields: [
       {

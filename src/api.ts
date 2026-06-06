@@ -32,12 +32,72 @@ export async function chooseLibraryDirectory() {
   return window.prompt("浏览器预览模式：输入资料库目录名称", "BrowserPreview") ?? undefined;
 }
 
+export async function importTemplateIcon(
+  libraryDir: string,
+  templateId: string,
+) {
+  if (isTauri()) {
+    const selected = await open({
+      directory: false,
+      filters: [
+        {
+          name: "图片",
+          extensions: ["png", "jpg", "jpeg", "webp", "gif", "svg"],
+        },
+      ],
+      multiple: false,
+      title: "选择知识类型图标",
+    });
+    if (typeof selected !== "string") return undefined;
+    return invoke<string>("import_template_icon", {
+      libraryDir,
+      sourcePath: selected,
+      templateId,
+    });
+  }
+
+  return readBrowserImage();
+}
+
+export async function loadTemplateIcon(libraryDir: string, iconImage?: string) {
+  if (!iconImage) return "";
+  if (/^(data:|blob:|https?:)/.test(iconImage)) return iconImage;
+  if (isTauri()) {
+    return invoke<string>("read_library_asset", {
+      assetPath: iconImage,
+      libraryDir,
+    });
+  }
+  return iconImage;
+}
+
 export async function getSettings(): Promise<AppSettings> {
   if (isTauri()) {
     return invoke<AppSettings>("get_settings");
   }
   const raw = localStorage.getItem(settingsKey);
   return raw ? JSON.parse(raw) : {};
+}
+
+function readBrowserImage() {
+  return new Promise<string | undefined>((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,image/jpeg,image/webp,image/gif,image/svg+xml";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) {
+        resolve(undefined);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () =>
+        resolve(typeof reader.result === "string" ? reader.result : undefined);
+      reader.onerror = () => resolve(undefined);
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  });
 }
 
 export async function saveSettings(settings: AppSettings) {
@@ -53,7 +113,7 @@ export async function loadLibrary(libraryDir: string): Promise<LibraryState> {
     return invoke<LibraryState>("load_library", { libraryDir });
   }
   const raw = localStorage.getItem(browserLibraryKey(libraryDir));
-  return raw ? JSON.parse(raw) : { templates: [], entries: [] };
+  return raw ? JSON.parse(raw) : { templates: [], entries: [], initialized: false };
 }
 
 export async function saveTemplate(libraryDir: string, template: KnowledgeTemplate) {
@@ -68,7 +128,7 @@ export async function saveTemplate(libraryDir: string, template: KnowledgeTempla
   ];
   localStorage.setItem(
     browserLibraryKey(libraryDir),
-    JSON.stringify({ ...state, templates: next }),
+    JSON.stringify({ ...state, templates: next, initialized: true }),
   );
 }
 
@@ -81,8 +141,10 @@ export async function deleteTemplate(libraryDir: string, templateId: string) {
   localStorage.setItem(
     browserLibraryKey(libraryDir),
     JSON.stringify({
+      ...state,
       templates: state.templates.filter((item) => item.id !== templateId),
-      entries: state.entries,
+      entries: state.entries.filter((item) => item.templateId !== templateId),
+      initialized: true,
     }),
   );
 }
@@ -96,7 +158,7 @@ export async function saveEntry(libraryDir: string, entry: KnowledgeEntry) {
   const next = [...state.entries.filter((item) => item.id !== entry.id), entry];
   localStorage.setItem(
     browserLibraryKey(libraryDir),
-    JSON.stringify({ ...state, entries: next }),
+    JSON.stringify({ ...state, entries: next, initialized: true }),
   );
 }
 

@@ -262,8 +262,8 @@ textarea {
   position: relative;
   display: grid;
   width: 100%;
-  min-height: 48px;
-  grid-template-columns: 24px 1fr auto;
+  min-height: 56px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   margin-bottom: 6px;
@@ -283,18 +283,50 @@ textarea {
   content: "";
 }
 
-.type-button svg {
+.type-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: rgba(15, 124, 131, 0.08);
+}
+
+.type-icon svg {
   width: 18px;
   height: 18px;
-  color: var(--accent);
+  color: currentColor;
   stroke-width: 1.8;
 }
 
-.type-button span {
+.type-icon .template-icon-image {
+  width: 100%;
+  height: 100%;
+}
+
+.type-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.type-name,
+.type-text small {
   overflow: hidden;
-  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.type-name {
+  font-weight: 700;
+}
+
+.type-text small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .type-button em,
@@ -458,6 +490,13 @@ textarea {
   width: 18px;
   height: 18px;
   stroke-width: 1.8;
+}
+
+.template-icon-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .entry-card strong,
@@ -856,7 +895,8 @@ textarea {
 }
 
 .template-designer {
-  grid-template-columns: minmax(560px, 1.2fr) minmax(360px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
 }
 
 .button-row {
@@ -866,7 +906,7 @@ textarea {
 
 .template-meta-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 88px;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(130px, 0.9fr) 150px 88px;
   gap: 12px;
   padding: 18px;
 }
@@ -883,6 +923,7 @@ textarea {
 }
 
 .template-meta-grid input,
+.template-meta-grid select,
 .field-card-grid input,
 .field-card-grid select {
   height: 36px;
@@ -892,6 +933,48 @@ textarea {
 .template-meta-grid .wide,
 .field-card-grid .wide {
   grid-column: 1 / -1;
+}
+
+.template-icon-editor {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+
+.template-icon-preview {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--radius);
+  color: #fff;
+}
+
+.template-icon-preview svg {
+  stroke-width: 1.8;
+}
+
+.template-icon-controls {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.template-icon-controls strong {
+  font-size: 13px;
+}
+
+.template-icon-editor > span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .field-designer-header {

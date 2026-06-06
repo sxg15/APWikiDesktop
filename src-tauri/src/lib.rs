@@ -1,9 +1,11 @@
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -17,6 +19,7 @@ struct AppSettings {
 struct LibraryState {
     templates: Vec<Value>,
     entries: Vec<Value>,
+    initialized: bool,
 }
 
 #[tauri::command]
@@ -36,10 +39,12 @@ fn save_settings(settings: AppSettings) -> Result<(), String> {
 
 #[tauri::command]
 fn load_library(library_dir: String) -> Result<LibraryState, String> {
+    let initialized = library_initialized(&library_dir);
     let root = ensure_library(&library_dir)?;
     Ok(LibraryState {
         templates: read_json_folder(&root.join("templates"))?,
         entries: read_entries(&root.join("entries"))?,
+        initialized,
     })
 }
 
@@ -48,7 +53,11 @@ fn save_template(library_dir: String, template: Value) -> Result<(), String> {
     let root = ensure_library(&library_dir)?;
     let id = required_json_string(&template, "id")?;
     validate_id(&id)?;
-    write_json(&root.join("templates").join(format!("{id}.json")), &template)
+    write_json(
+        &root.join("templates").join(format!("{id}.json")),
+        &template,
+    )?;
+    mark_library_initialized(&root)
 }
 
 #[tauri::command]
@@ -59,7 +68,67 @@ fn delete_template(library_dir: String, template_id: String) -> Result<(), Strin
     if path.exists() {
         fs::remove_file(&path).map_err(|error| format!("Failed to delete {:?}: {error}", path))?;
     }
+    let entries = root.join("entries").join(template_id);
+    if entries.exists() {
+        fs::remove_dir_all(&entries)
+            .map_err(|error| format!("Failed to delete {:?}: {error}", entries))?;
+    }
+    mark_library_initialized(&root)?;
     Ok(())
+}
+
+#[tauri::command]
+fn import_template_icon(
+    library_dir: String,
+    template_id: String,
+    source_path: String,
+) -> Result<String, String> {
+    validate_id(&template_id)?;
+    let root = ensure_library(&library_dir)?;
+    let source = PathBuf::from(&source_path);
+    if !source.is_file() {
+        return Err(format!("Icon file was not found: {source_path}"));
+    }
+    let ext = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .ok_or_else(|| "Icon file must have an image extension.".to_string())?;
+    if !is_supported_image_extension(&ext) {
+        return Err(format!("Unsupported image type: {ext}"));
+    }
+    let stem = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| sanitize_asset_stem(value))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "icon".to_string());
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("Failed to create icon timestamp: {error}"))?
+        .as_millis();
+    let relative = format!("assets/type-icons/{template_id}-{stamp}-{stem}.{ext}");
+    let target = root.join(&relative);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create {:?}: {error}", parent))?;
+    }
+    fs::copy(&source, &target)
+        .map_err(|error| format!("Failed to copy icon {:?}: {error}", source))?;
+    mark_library_initialized(&root)?;
+    Ok(relative)
+}
+
+#[tauri::command]
+fn read_library_asset(library_dir: String, asset_path: String) -> Result<String, String> {
+    let root = ensure_library(&library_dir)?;
+    let path = resolve_library_asset(&root, &asset_path)?;
+    let bytes = fs::read(&path).map_err(|error| format!("Failed to read {:?}: {error}", path))?;
+    let mime = image_mime_type(&path)?;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 #[tauri::command]
@@ -71,7 +140,8 @@ fn save_entry(library_dir: String, entry: Value) -> Result<(), String> {
     validate_id(&template_id)?;
     let dir = root.join("entries").join(&template_id);
     fs::create_dir_all(&dir).map_err(|error| format!("Failed to create {:?}: {error}", dir))?;
-    write_json(&dir.join(format!("{id}.json")), &entry)
+    write_json(&dir.join(format!("{id}.json")), &entry)?;
+    mark_library_initialized(&root)
 }
 
 #[tauri::command]
@@ -116,6 +186,8 @@ pub fn run() {
             load_library,
             save_template,
             delete_template,
+            import_template_icon,
+            read_library_asset,
             save_entry,
             delete_entry,
             export_entry_markdown
@@ -144,6 +216,78 @@ fn ensure_library(library_dir: &str) -> Result<PathBuf, String> {
     fs::create_dir_all(root.join("exports"))
         .map_err(|error| format!("Failed to create exports folder: {error}"))?;
     Ok(root)
+}
+
+fn library_initialized(library_dir: &str) -> bool {
+    let root = PathBuf::from(library_dir);
+    root.join(".apwiki-library.json").exists()
+        || root.join("templates").exists()
+        || root.join("entries").exists()
+}
+
+fn mark_library_initialized(root: &Path) -> Result<(), String> {
+    write_json(
+        &root.join(".apwiki-library.json"),
+        &serde_json::json!({ "initialized": true }),
+    )
+}
+
+fn resolve_library_asset(root: &Path, asset_path: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(asset_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("Asset path must stay inside the library.".to_string());
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("Failed to locate library folder: {error}"))?;
+    let path = root.join(relative);
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("Failed to locate asset {:?}: {error}", path))?;
+    if !path.starts_with(&root) {
+        return Err("Asset path must stay inside the library.".to_string());
+    }
+    Ok(path)
+}
+
+fn is_supported_image_extension(ext: &str) -> bool {
+    matches!(ext, "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg")
+}
+
+fn image_mime_type(path: &Path) -> Result<&'static str, String> {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Ok("image/png"),
+        Some("jpg") | Some("jpeg") => Ok("image/jpeg"),
+        Some("webp") => Ok("image/webp"),
+        Some("gif") => Ok("image/gif"),
+        Some("svg") => Ok("image/svg+xml"),
+        Some(ext) => Err(format!("Unsupported image type: {ext}")),
+        None => Err("Icon file must have an image extension.".to_string()),
+    }
+}
+
+fn sanitize_asset_stem(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
 }
 
 fn read_json_folder(dir: &Path) -> Result<Vec<Value>, String> {
@@ -243,10 +387,7 @@ mod tests {
 
     #[test]
     fn saves_loads_and_exports_library_files() {
-        let root = std::env::temp_dir().join(format!(
-            "apwiki-desktop-test-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("apwiki-desktop-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let library_dir = root.to_string_lossy().to_string();
 
@@ -279,11 +420,24 @@ mod tests {
             "# 攻击_近战_单体".to_string(),
         )
         .expect("markdown should be exported");
+        let source_icon = root.join("source-icon.png");
+        fs::write(&source_icon, [137, 80, 78, 71]).expect("test icon should be written");
+        let icon_asset = import_template_icon(
+            library_dir.clone(),
+            "tile".to_string(),
+            source_icon.to_string_lossy().to_string(),
+        )
+        .expect("icon should be imported");
+        let icon_data_url = read_library_asset(library_dir.clone(), icon_asset.clone())
+            .expect("icon should be readable");
 
         let loaded = load_library(library_dir).expect("library should load");
         assert_eq!(loaded.templates.len(), 1);
         assert_eq!(loaded.entries.len(), 1);
+        assert!(loaded.initialized);
         assert!(PathBuf::from(exported).exists());
+        assert!(root.join(icon_asset).exists());
+        assert!(icon_data_url.starts_with("data:image/png;base64,"));
 
         fs::remove_dir_all(root).expect("test library should be cleaned");
     }
