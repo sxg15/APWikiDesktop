@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::{
     fs,
     io::Write,
@@ -24,6 +24,9 @@ struct LibraryState {
     initialized: bool,
 }
 
+const DEFAULT_LANGUAGE: &str = "zh";
+const SUPPORTED_LANGUAGES: [&str; 9] = ["zh", "en", "ja", "ko", "it", "es", "de", "pt", "ru"];
+
 #[tauri::command]
 fn get_settings() -> Result<AppSettings, String> {
     let path = settings_path()?;
@@ -44,7 +47,7 @@ fn load_library(library_dir: String) -> Result<LibraryState, String> {
     let initialized = library_initialized(&library_dir);
     let root = ensure_library(&library_dir)?;
     Ok(LibraryState {
-        templates: read_json_folder(&root.join("templates"))?,
+        templates: read_templates(&root.join("templates"))?,
         entries: read_entries(&root.join("entries"))?,
         initialized,
     })
@@ -55,10 +58,22 @@ fn save_template(library_dir: String, template: Value) -> Result<(), String> {
     let root = ensure_library(&library_dir)?;
     let id = required_json_string(&template, "id")?;
     validate_id(&id)?;
+    let dir = root.join("templates").join(&id);
+    fs::create_dir_all(&dir).map_err(|error| format!("Failed to create {:?}: {error}", dir))?;
     write_json(
-        &root.join("templates").join(format!("{id}.json")),
-        &template,
+        &dir.join("template.json"),
+        &shared_template_value(&template),
     )?;
+    write_language_files(
+        &dir,
+        template_language_payloads(&template)?,
+        "template.json",
+    )?;
+    let legacy_path = root.join("templates").join(format!("{id}.json"));
+    if legacy_path.exists() {
+        fs::remove_file(&legacy_path)
+            .map_err(|error| format!("Failed to delete {:?}: {error}", legacy_path))?;
+    }
     mark_library_initialized(&root)
 }
 
@@ -69,6 +84,11 @@ fn delete_template(library_dir: String, template_id: String) -> Result<(), Strin
     let path = root.join("templates").join(format!("{template_id}.json"));
     if path.exists() {
         fs::remove_file(&path).map_err(|error| format!("Failed to delete {:?}: {error}", path))?;
+    }
+    let template_folder = root.join("templates").join(&template_id);
+    if template_folder.exists() {
+        fs::remove_dir_all(&template_folder)
+            .map_err(|error| format!("Failed to delete {:?}: {error}", template_folder))?;
     }
     let entries = root.join("entries").join(template_id);
     if entries.exists() {
@@ -175,7 +195,8 @@ fn save_entry(library_dir: String, entry: Value) -> Result<(), String> {
     validate_id(&template_id)?;
     let dir = root.join("entries").join(&template_id).join(&id);
     fs::create_dir_all(&dir).map_err(|error| format!("Failed to create {:?}: {error}", dir))?;
-    write_json(&dir.join("entry.json"), &entry)?;
+    write_json(&dir.join("entry.json"), &shared_entry_value(&entry))?;
+    write_language_files(&dir, entry_language_payloads(&entry)?, "entry.json")?;
     let legacy_path = root
         .join("entries")
         .join(&template_id)
@@ -386,7 +407,27 @@ fn sanitize_asset_stem(value: &str) -> String {
         .to_string()
 }
 
-fn read_json_folder(dir: &Path) -> Result<Vec<Value>, String> {
+fn is_supported_language(language: &str) -> bool {
+    SUPPORTED_LANGUAGES.contains(&language)
+}
+
+fn file_stem_string(path: &Path) -> Option<String> {
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::to_string)
+}
+
+fn file_name_string(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_string)
+}
+
+fn language_code_from_path(path: &Path) -> Option<String> {
+    file_stem_string(path).filter(|language| is_supported_language(language))
+}
+
+fn json_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -397,7 +438,299 @@ fn read_json_folder(dir: &Path) -> Result<Vec<Value>, String> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .collect::<Vec<_>>();
     files.sort();
-    files.into_iter().map(|path| read_json(&path)).collect()
+    Ok(files)
+}
+
+fn child_folders(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut folders = fs::read_dir(dir)
+        .map_err(|error| format!("Failed to read {:?}: {error}", dir))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    folders.sort();
+    Ok(folders)
+}
+
+fn object_without_keys(value: &Value, keys: &[&str]) -> Value {
+    let object = value
+        .as_object()
+        .map(|source| {
+            source
+                .iter()
+                .filter(|(key, _)| !keys.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Map<String, Value>>()
+        })
+        .unwrap_or_default();
+    Value::Object(object)
+}
+
+fn shared_template_value(template: &Value) -> Value {
+    object_without_keys(
+        template,
+        &[
+            "name",
+            "description",
+            "fields",
+            "markdownTemplate",
+            "translations",
+        ],
+    )
+}
+
+fn shared_entry_value(entry: &Value) -> Value {
+    object_without_keys(entry, &["title", "values", "translations"])
+}
+
+fn payload_from_keys(value: &Value, keys: &[&str]) -> Value {
+    let mut payload = Map::new();
+    if let Some(object) = value.as_object() {
+        for key in keys {
+            if let Some(field) = object.get(*key) {
+                payload.insert((*key).to_string(), field.clone());
+            }
+        }
+    }
+    Value::Object(payload)
+}
+
+fn merge_payload(target: &mut Value, patch: &Value) -> Result<(), String> {
+    let target = target
+        .as_object_mut()
+        .ok_or_else(|| "Language payload must be a JSON object.".to_string())?;
+    let patch = patch
+        .as_object()
+        .ok_or_else(|| "Language payload must be a JSON object.".to_string())?;
+    for (key, value) in patch {
+        target.insert(key.clone(), value.clone());
+    }
+    Ok(())
+}
+
+fn translation_payload(value: &Value, language: &str) -> Result<Option<Value>, String> {
+    let Some(translations) = value.get("translations") else {
+        return Ok(None);
+    };
+    let translations = translations
+        .as_object()
+        .ok_or_else(|| "`translations` must be a JSON object.".to_string())?;
+    let Some(payload) = translations.get(language) else {
+        return Ok(None);
+    };
+    if !payload.is_object() {
+        return Err(format!("Translation `{language}` must be a JSON object."));
+    }
+    Ok(Some(payload.clone()))
+}
+
+fn template_language_payloads(template: &Value) -> Result<Vec<(String, Value)>, String> {
+    language_payloads(
+        template,
+        &["name", "description", "fields", "markdownTemplate"],
+    )
+}
+
+fn entry_language_payloads(entry: &Value) -> Result<Vec<(String, Value)>, String> {
+    language_payloads(entry, &["title", "values"])
+}
+
+fn language_payloads(value: &Value, default_keys: &[&str]) -> Result<Vec<(String, Value)>, String> {
+    let mut payloads = Vec::new();
+    for language in SUPPORTED_LANGUAGES {
+        let mut payload = if language == DEFAULT_LANGUAGE {
+            payload_from_keys(value, default_keys)
+        } else {
+            Value::Object(Map::new())
+        };
+        if let Some(translation) = translation_payload(value, language)? {
+            merge_payload(&mut payload, &translation)?;
+        }
+        if language == DEFAULT_LANGUAGE
+            || payload.as_object().is_some_and(|object| !object.is_empty())
+        {
+            payloads.push((language.to_string(), payload));
+        }
+    }
+    Ok(payloads)
+}
+
+fn write_language_files(
+    dir: &Path,
+    payloads: Vec<(String, Value)>,
+    shared_file_name: &str,
+) -> Result<(), String> {
+    let keep = payloads
+        .iter()
+        .map(|(language, _)| format!("{language}.json"))
+        .collect::<Vec<_>>();
+    for file in json_files(dir)? {
+        let Some(file_name) = file_name_string(&file) else {
+            continue;
+        };
+        if file_name == shared_file_name {
+            continue;
+        }
+        if language_code_from_path(&file).is_some() && !keep.contains(&file_name) {
+            fs::remove_file(&file)
+                .map_err(|error| format!("Failed to delete {:?}: {error}", file))?;
+        }
+    }
+    for (language, payload) in payloads {
+        write_json(&dir.join(format!("{language}.json")), &payload)?;
+    }
+    Ok(())
+}
+
+fn read_templates(templates_dir: &Path) -> Result<Vec<Value>, String> {
+    if !templates_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut templates = Vec::new();
+    let mut folder_ids = Vec::new();
+    for folder in child_folders(templates_dir)? {
+        let template = read_template_folder(&folder)?;
+        if let Some(id) = template.get("id").and_then(Value::as_str) {
+            folder_ids.push(id.to_string());
+        }
+        templates.push(template);
+    }
+    for file in json_files(templates_dir)? {
+        let mut template = read_json::<Value>(&file)?;
+        let id = ensure_id_from_path(&mut template, &file)?;
+        if !folder_ids.contains(&id) {
+            templates.push(template);
+        }
+    }
+    Ok(templates)
+}
+
+fn read_template_folder(folder: &Path) -> Result<Value, String> {
+    let template_path = folder.join("template.json");
+    let mut template = if template_path.exists() {
+        read_json::<Value>(&template_path)?
+    } else {
+        Value::Object(Map::new())
+    };
+    ensure_id_from_path(&mut template, folder)?;
+    apply_language_files(
+        &mut template,
+        folder,
+        &["name", "description", "fields", "markdownTemplate"],
+    )?;
+    Ok(template)
+}
+
+fn read_entry_folder(folder: &Path, template_id: &str) -> Result<Value, String> {
+    let entry_path = folder.join("entry.json");
+    let mut entry = if entry_path.exists() {
+        read_json::<Value>(&entry_path)?
+    } else {
+        Value::Object(Map::new())
+    };
+    ensure_id_from_path(&mut entry, folder)?;
+    set_string_if_missing(&mut entry, "templateId", template_id.to_string());
+    apply_language_files(&mut entry, folder, &["title", "values"])?;
+    Ok(entry)
+}
+
+fn apply_language_files(
+    value: &mut Value,
+    dir: &Path,
+    default_keys: &[&str],
+) -> Result<(), String> {
+    for file in json_files(dir)? {
+        let Some(language) = language_code_from_path(&file) else {
+            continue;
+        };
+        let payload = read_json::<Value>(&file)?;
+        if !payload.is_object() {
+            return Err(format!(
+                "Language file {:?} must contain a JSON object.",
+                file
+            ));
+        }
+        if language == DEFAULT_LANGUAGE {
+            apply_default_language_payload(value, &payload, default_keys)?;
+        }
+        set_translation_payload(value, &language, payload)?;
+    }
+    Ok(())
+}
+
+fn apply_default_language_payload(
+    value: &mut Value,
+    payload: &Value,
+    keys: &[&str],
+) -> Result<(), String> {
+    let object = value_as_object_mut(value)?;
+    let payload = payload
+        .as_object()
+        .ok_or_else(|| "Language payload must be a JSON object.".to_string())?;
+    for key in keys {
+        if let Some(field) = payload.get(*key) {
+            object.insert((*key).to_string(), field.clone());
+        }
+    }
+    Ok(())
+}
+
+fn set_translation_payload(
+    value: &mut Value,
+    language: &str,
+    payload: Value,
+) -> Result<(), String> {
+    let object = value_as_object_mut(value)?;
+    if !object
+        .get("translations")
+        .is_some_and(|translations| translations.is_object())
+    {
+        object.insert("translations".to_string(), Value::Object(Map::new()));
+    }
+    let translations = object
+        .get_mut("translations")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "`translations` must be a JSON object.".to_string())?;
+    translations.insert(language.to_string(), payload);
+    Ok(())
+}
+
+fn ensure_id_from_path(value: &mut Value, path: &Path) -> Result<String, String> {
+    let fallback = file_stem_string(path)
+        .or_else(|| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| format!("Failed to infer id from {:?}", path))?;
+    let object = value_as_object_mut(value)?;
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or(fallback);
+    object.insert("id".to_string(), Value::String(id.clone()));
+    Ok(id)
+}
+
+fn set_string_if_missing(value: &mut Value, key: &str, text: String) {
+    if let Some(object) = value.as_object_mut() {
+        if !object.contains_key(key) {
+            object.insert(key.to_string(), Value::String(text));
+        }
+    }
+}
+
+fn value_as_object_mut(value: &mut Value) -> Result<&mut Map<String, Value>, String> {
+    if !value.is_object() {
+        *value = Value::Object(Map::new());
+    }
+    value
+        .as_object_mut()
+        .ok_or_else(|| "Expected JSON object.".to_string())
 }
 
 fn read_entries(entries_dir: &Path) -> Result<Vec<Value>, String> {
@@ -419,18 +752,26 @@ fn read_entries(entries_dir: &Path) -> Result<Vec<Value>, String> {
 }
 
 fn read_template_entries(template_dir: &Path) -> Result<Vec<Value>, String> {
-    let mut entries = read_json_folder(template_dir)?;
-    let mut folders = fs::read_dir(template_dir)
-        .map_err(|error| format!("Failed to read {:?}: {error}", template_dir))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect::<Vec<_>>();
-    folders.sort();
-    for folder in folders {
-        let entry_path = folder.join("entry.json");
-        if entry_path.exists() {
-            entries.push(read_json(&entry_path)?);
+    let template_id = template_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("Failed to infer template id from {:?}", template_dir))?
+        .to_string();
+    let mut entries = Vec::new();
+    let mut folder_ids = Vec::new();
+    for folder in child_folders(template_dir)? {
+        let entry = read_entry_folder(&folder, &template_id)?;
+        if let Some(id) = entry.get("id").and_then(Value::as_str) {
+            folder_ids.push(id.to_string());
+        }
+        entries.push(entry);
+    }
+    for file in json_files(template_dir)? {
+        let mut entry = read_json::<Value>(&file)?;
+        let id = ensure_id_from_path(&mut entry, &file)?;
+        set_string_if_missing(&mut entry, "templateId", template_id.clone());
+        if !folder_ids.contains(&id) {
+            entries.push(entry);
         }
     }
     Ok(entries)
@@ -510,8 +851,17 @@ mod tests {
             json!({
                 "id": "tile",
                 "name": "瓦片",
+                "description": "中文简介",
                 "fields": [],
-                "markdownTemplate": "# {{name}}"
+                "markdownTemplate": "# {{name}}",
+                "translations": {
+                    "en": {
+                        "name": "Tile",
+                        "description": "English description",
+                        "fields": [],
+                        "markdownTemplate": "# {{name}}"
+                    }
+                }
             }),
         )
         .expect("template should be saved");
@@ -522,7 +872,13 @@ mod tests {
                 "id": "entry-1",
                 "templateId": "tile",
                 "title": "攻击_近战_单体",
-                "values": { "name": "攻击_近战_单体" }
+                "values": { "name": "攻击_近战_单体" },
+                "translations": {
+                    "en": {
+                        "title": "Melee Attack",
+                        "values": { "name": "Melee Attack" }
+                    }
+                }
             }),
         )
         .expect("entry should be saved");
@@ -566,7 +922,27 @@ mod tests {
         assert_eq!(loaded.templates.len(), 1);
         assert_eq!(loaded.entries.len(), 1);
         assert!(loaded.initialized);
+        assert_eq!(loaded.templates[0]["name"], "瓦片");
+        assert_eq!(loaded.templates[0]["translations"]["en"]["name"], "Tile");
+        assert_eq!(loaded.entries[0]["title"], "攻击_近战_单体");
+        assert_eq!(
+            loaded.entries[0]["translations"]["en"]["title"],
+            "Melee Attack"
+        );
         assert!(PathBuf::from(exported).exists());
+        assert!(!root.join("templates").join("tile.json").exists());
+        assert!(root
+            .join("templates")
+            .join("tile")
+            .join("template.json")
+            .exists());
+        assert!(root.join("templates").join("tile").join("zh.json").exists());
+        assert!(root.join("templates").join("tile").join("en.json").exists());
+        let shared_template =
+            read_json::<Value>(&root.join("templates").join("tile").join("template.json"))
+                .expect("shared template json should load");
+        assert!(shared_template.get("translations").is_none());
+        assert!(shared_template.get("name").is_none());
         assert!(root.join("entries").join("tile").join("entry-1").is_dir());
         assert!(root
             .join("entries")
@@ -574,6 +950,29 @@ mod tests {
             .join("entry-1")
             .join("entry.json")
             .exists());
+        assert!(root
+            .join("entries")
+            .join("tile")
+            .join("entry-1")
+            .join("zh.json")
+            .exists());
+        assert!(root
+            .join("entries")
+            .join("tile")
+            .join("entry-1")
+            .join("en.json")
+            .exists());
+        let shared_entry = read_json::<Value>(
+            &root
+                .join("entries")
+                .join("tile")
+                .join("entry-1")
+                .join("entry.json"),
+        )
+        .expect("shared entry json should load");
+        assert!(shared_entry.get("translations").is_none());
+        assert!(shared_entry.get("values").is_none());
+        assert!(shared_entry.get("title").is_none());
         assert!(root.join(icon_asset).exists());
         assert!(icon_data_url.starts_with("data:image/png;base64,"));
         assert!(root.join(&frame_assets[0]).exists());
