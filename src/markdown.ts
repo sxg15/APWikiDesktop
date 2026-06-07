@@ -3,6 +3,7 @@ import type {
 } from "./i18n";
 import { defaultLanguage } from "./i18n";
 import { fieldOptionsForTemplate } from "./options";
+import { isGroupField } from "./groups";
 import type {
   FieldDefinition,
   KnowledgeEntry,
@@ -47,7 +48,9 @@ export function defaultValueForField(field: FieldDefinition): unknown {
 
 export function valuesFromTemplate(template: KnowledgeTemplate) {
   return Object.fromEntries(
-    template.fields.map((field) => [field.id, defaultValueForField(field)]),
+    template.fields
+      .filter((field) => !isGroupField(field))
+      .map((field) => [field.id, defaultValueForField(field)]),
   );
 }
 
@@ -112,9 +115,10 @@ export function renderMarkdownTemplate(
   fallbackLanguage: LanguageCode = defaultLanguage,
 ) {
   const markdownTemplate = generatedMarkdownTemplate(template);
-  const byId = new Map(template.fields.map((field) => [field.id, field]));
-  const byLabel = new Map(template.fields.map((field) => [field.label, field]));
-  const autoAppendFields = template.fields.filter(isAutoAppendField);
+  const visibleFields = template.fields.filter((field) => !isGroupField(field));
+  const byId = new Map(visibleFields.map((field) => [field.id, field]));
+  const byLabel = new Map(visibleFields.map((field) => [field.label, field]));
+  const autoAppendFields = visibleFields.filter(isAutoAppendField);
 
   const rendered = markdownTemplate.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => {
     const normalized = String(key).trim();
@@ -152,13 +156,14 @@ export function renderMarkdownTemplate(
 }
 
 export function generatedMarkdownTemplate(template: Pick<KnowledgeTemplate, "fields" | "titleFieldId">) {
+  const fields = template.fields.filter((field) => !isGroupField(field));
   const titleField =
-    template.fields.find((field) => field.id === template.titleFieldId) ??
-    template.fields.find((field) => field.type === "text") ??
-    template.fields[0];
+    fields.find((field) => field.id === template.titleFieldId) ??
+    fields.find((field) => field.type === "text") ??
+    fields[0];
   const lines = [`# ${titleField ? fieldPlaceholder(titleField) : "{{title}}"}`];
 
-  for (const field of template.fields) {
+  for (const field of fields) {
     lines.push("");
     if (isSectionField(field)) {
       lines.push(`## ${fieldTitle(field)}`, "", fieldPlaceholder(field));

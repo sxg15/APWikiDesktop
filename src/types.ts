@@ -44,6 +44,12 @@ export interface TemplateOptionSet {
   items: TemplateOptionItem[];
 }
 
+export interface TemplateGroupOption {
+  id: string;
+  label: string;
+  translations?: Partial<Record<LanguageCode, string>>;
+}
+
 export interface KnowledgeTemplate {
   id: string;
   name: string;
@@ -56,6 +62,7 @@ export interface KnowledgeTemplate {
   color: string;
   fields: FieldDefinition[];
   optionSets?: TemplateOptionSet[];
+  groupOptions?: TemplateGroupOption[];
   markdownTemplate: string;
   translations?: Partial<Record<LanguageCode, KnowledgeTemplateTranslation>>;
   createdAt: string;
@@ -97,6 +104,7 @@ export interface KnowledgeEntry {
   id: string;
   templateId: string;
   title: string;
+  groupIds?: string[];
   values: Record<string, unknown>;
   translations?: Partial<Record<LanguageCode, KnowledgeEntryTranslation>>;
   createdAt: string;

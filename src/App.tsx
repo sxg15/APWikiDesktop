@@ -110,6 +110,17 @@ import {
 } from "./richImage";
 import { parseRichImageMarkdown } from "./richImageMarkdown";
 import {
+  entryGroupLabels,
+  groupOptionLabel,
+  groupOptionsAsFieldOptions,
+  isGroupField,
+  legacyGroupLabels,
+  normalizeEntryGroupIds,
+  normalizeGroupOption,
+  normalizeTemplateGroups,
+  ungroupedGroupId,
+} from "./groups";
+import {
   normalizeTileSizeValue,
   tileSizeHasCells,
 } from "./tileSize";
@@ -122,6 +133,7 @@ import type {
   KnowledgeTemplateTranslation,
   ParameterRow,
   RichImageValue,
+  TemplateGroupOption,
   TemplateOptionItem,
   TemplateOptionSet,
   TileSizeValue,
@@ -129,7 +141,7 @@ import type {
 
 type EntryView = "edit" | "preview";
 type SettingsTab = "library" | "language" | "layout" | "about";
-type TemplateDesignerTab = "fields" | "options";
+type TemplateDesignerTab = "fields" | "options" | "groups";
 type Status = { tone: "ok" | "warn"; text: string } | undefined;
 type UnsavedChoice = "cancel" | "save" | "discard";
 type UnsavedScope = "entry" | "template";
@@ -357,10 +369,24 @@ function requiredMissing(field: FieldDefinition, value: unknown) {
   return value === undefined || value === null || String(value).trim() === "";
 }
 
-function entryGroup(entry: KnowledgeEntry) {
-  const value =
-    entry.values.group ?? entry.values.category ?? entry.values.namespace;
-  return typeof value === "string" && value.trim() ? value.trim() : "未分组";
+function entryGroupIds(entry: KnowledgeEntry) {
+  return Array.isArray(entry.groupIds) ? entry.groupIds.filter(Boolean) : [];
+}
+
+function entryMatchesGroup(entry: KnowledgeEntry, groupId: string) {
+  const groupIds = entryGroupIds(entry);
+  if (groupId === ungroupedGroupId) return groupIds.length === 0;
+  return groupIds.includes(groupId);
+}
+
+function entryGroupsText(
+  template: KnowledgeTemplate,
+  entry: KnowledgeEntry,
+  language: LanguageCode,
+  fallbackLanguage: LanguageCode,
+) {
+  const labels = entryGroupLabels(template, entry, language, fallbackLanguage);
+  return labels.length ? labels.join("，") : "未分组";
 }
 
 function hasMeaningfulValue(value: unknown): boolean {
@@ -403,6 +429,23 @@ function entriesById(entries: KnowledgeEntry[]) {
   return Object.fromEntries(entries.map((entry) => [entry.id, cloneEntry(entry)]));
 }
 
+function legacyGroupLabelsByTemplate(entries: KnowledgeEntry[]) {
+  const byTemplate = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const labels = legacyGroupLabels(entry);
+    if (!labels.length) continue;
+    const current = byTemplate.get(entry.templateId) ?? new Set<string>();
+    labels.forEach((label) => current.add(label));
+    byTemplate.set(entry.templateId, current);
+  }
+  return new Map(
+    [...byTemplate.entries()].map(([templateId, labels]) => [
+      templateId,
+      [...labels],
+    ]),
+  );
+}
+
 function entryValuesForLanguage(entry: KnowledgeEntry, language: LanguageCode) {
   if (language === defaultLanguage) return entry.values;
   return entry.translations?.[language]?.values;
@@ -430,6 +473,8 @@ function templateTranslationHasContent(
   template: KnowledgeTemplate | KnowledgeTemplateTranslation | undefined,
 ) {
   if (!template) return false;
+  const groupOptions =
+    "groupOptions" in template ? template.groupOptions : undefined;
   return hasMeaningfulValue({
     name: template.name,
     description: template.description,
@@ -437,6 +482,10 @@ function templateTranslationHasContent(
       label: field.label,
       placeholder: field.placeholder,
       options: field.options,
+    })),
+    groupOptions: groupOptions?.map((group: TemplateGroupOption) => ({
+      label: group.label,
+      translations: group.translations,
     })),
   });
 }
@@ -465,15 +514,23 @@ function templateLanguageEmptyMap(
   ) as LanguageEmptyMap;
 }
 
-function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
-  const normalizedFields = template.fields.map(normalizeField);
+function normalizeTemplate(
+  template: KnowledgeTemplate,
+  legacyGroupOptionLabels: string[] = [],
+): KnowledgeTemplate {
+  const normalizedFields = normalizeTemplateFields(template.fields);
   const choiceConfig = normalizeChoiceConfig(
     normalizedFields,
     template.optionSets,
   );
+  const titleFieldId = choiceConfig.fields.some(
+    (field) => field.id === normalizeFieldId(template.titleFieldId),
+  )
+    ? normalizeFieldId(template.titleFieldId)
+    : undefined;
   const normalizedTemplate = {
     ...template,
-    titleFieldId: normalizeFieldId(template.titleFieldId),
+    titleFieldId,
     fields: choiceConfig.fields,
   };
   const translations = template.translations
@@ -488,12 +545,16 @@ function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
     ...template,
     color: template.color || "#0f7c80",
     description: template.description ?? "",
-    titleFieldId: normalizedTemplate.titleFieldId,
+    titleFieldId,
     iconFieldId: normalizeFieldId(template.iconFieldId),
     descriptionFieldId: normalizeFieldId(template.descriptionFieldId),
     icon: templateIconName(template),
     fields: choiceConfig.fields,
     optionSets: choiceConfig.optionSets,
+    groupOptions: normalizeTemplateGroups(
+      template.groupOptions,
+      legacyGroupOptionLabels,
+    ),
     translations: translations as KnowledgeTemplate["translations"],
     markdownTemplate: generatedMarkdownTemplate(normalizedTemplate),
   };
@@ -504,7 +565,9 @@ function normalizeTemplateTranslation(
   translation: KnowledgeTemplateTranslation | undefined,
 ) {
   if (!translation) return translation;
-  const fields = translation.fields?.map(normalizeField);
+  const fields = translation.fields
+    ? normalizeTemplateFields(translation.fields)
+    : undefined;
   return {
     ...translation,
     fields,
@@ -513,6 +576,10 @@ function normalizeTemplateTranslation(
       fields: fields ?? baseTemplate.fields,
     }),
   };
+}
+
+function normalizeTemplateFields(fields: FieldDefinition[]) {
+  return fields.map(normalizeField).filter((field) => !isGroupField(field));
 }
 
 function normalizeFieldId(fieldId?: string) {
@@ -557,6 +624,7 @@ function normalizeField(field: FieldDefinition): FieldDefinition {
 }
 
 function normalizeEntry(entry: KnowledgeEntry, template?: KnowledgeTemplate): KnowledgeEntry {
+  const groupIds = normalizeEntryGroupIds(entry, template);
   const values = normalizeEntryValues(entry.values, template);
   const translations = entry.translations
     ? Object.fromEntries(
@@ -575,6 +643,7 @@ function normalizeEntry(entry: KnowledgeEntry, template?: KnowledgeTemplate): Kn
     : undefined;
   return {
     ...entry,
+    groupIds,
     values: normalizeEntryValues(values, template),
     translations: translations as KnowledgeEntry["translations"],
   };
@@ -585,10 +654,9 @@ function normalizeEntryValues(
   template?: KnowledgeTemplate,
   fillMissingStructuredValues = true,
 ) {
-  const next: Record<string, unknown> =
-    values.group !== undefined || values.category === undefined
-      ? { ...values }
-      : { ...values, group: values.category };
+  const next: Record<string, unknown> = { ...values };
+  delete next.group;
+  delete next.category;
   for (const field of template?.fields ?? []) {
     if (
       field.type === "richImage" ||
@@ -717,24 +785,55 @@ export default function App() {
     const keyword = query.trim().toLowerCase();
     if (!selectedTemplate) return [];
     const grouped = selectedGroup
-      ? templateEntries.filter((entry) => entryGroup(entry) === selectedGroup)
+      ? templateEntries.filter((entry) => entryMatchesGroup(entry, selectedGroup))
       : templateEntries;
     if (!keyword) return grouped;
     return grouped.filter((entry) => {
       const title = entryTitle(selectedTemplate, entry).toLowerCase();
       const values = JSON.stringify(entry.values).toLowerCase();
-      return title.includes(keyword) || values.includes(keyword);
+      const groupsText = entryGroupsText(
+        selectedTemplate,
+        entry,
+        currentLanguage,
+        fallbackLanguage,
+      ).toLowerCase();
+      return title.includes(keyword) || values.includes(keyword) || groupsText.includes(keyword);
     });
-  }, [query, selectedGroup, selectedTemplate, templateEntries]);
+  }, [currentLanguage, fallbackLanguage, query, selectedGroup, selectedTemplate, templateEntries]);
 
-  const groups = useMemo(() => {
+  const groupRows = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const entry of templateEntries) {
-      const group = entryGroup(entry);
-      counts.set(group, (counts.get(group) ?? 0) + 1);
+    for (const group of selectedTemplate?.groupOptions ?? []) {
+      counts.set(group.id, 0);
     }
-    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [templateEntries]);
+    let ungroupedCount = 0;
+    for (const entry of templateEntries) {
+      const groupIds = entryGroupIds(entry);
+      if (!groupIds.length) {
+        ungroupedCount += 1;
+        continue;
+      }
+      for (const groupId of groupIds) {
+        if (counts.has(groupId)) {
+          counts.set(groupId, (counts.get(groupId) ?? 0) + 1);
+        }
+      }
+    }
+    const rows = (selectedTemplate?.groupOptions ?? []).map((group) => ({
+      id: group.id,
+      label: groupOptionLabel(group, currentLanguage, fallbackLanguage),
+      count: counts.get(group.id) ?? 0,
+    }));
+    if (ungroupedCount > 0) {
+      rows.push({ id: ungroupedGroupId, label: "未分组", count: ungroupedCount });
+    }
+    return rows.sort((a, b) => a.label.localeCompare(b.label));
+  }, [currentLanguage, fallbackLanguage, selectedTemplate, templateEntries]);
+
+  const selectedGroupLabel = useMemo(
+    () => groupRows.find((group) => group.id === selectedGroup)?.label ?? "",
+    [groupRows, selectedGroup],
+  );
 
   const previewMarkdown = useMemo(() => {
     if (!selectedTemplate || !selectedEntry) return "";
@@ -782,10 +881,10 @@ export default function App() {
   }, [hasUnsavedChanges]);
 
   useEffect(() => {
-    if (selectedGroup && !groups.some(([group]) => group === selectedGroup)) {
+    if (selectedGroup && !groupRows.some((group) => group.id === selectedGroup)) {
       setSelectedGroup("");
     }
-  }, [groups, selectedGroup]);
+  }, [groupRows, selectedGroup]);
 
   useEffect(() => {
     if (!libraryDir || templates.length === 0) {
@@ -819,15 +918,18 @@ export default function App() {
   async function refreshLibrary(dir: string) {
     setLoading(true);
     const state = await loadLibrary(dir);
+    const legacyGroups = legacyGroupLabelsByTemplate(state.entries);
     let nextTemplates: KnowledgeTemplate[] =
-      state.templates.map(normalizeTemplate);
+      state.templates.map((template) =>
+        normalizeTemplate(template, legacyGroups.get(template.id) ?? []),
+      );
     if (!state.initialized && nextTemplates.length === 0) {
       const seeded = defaultTemplates.map((template) => ({
         ...cloneTemplate(template),
         icon: templateIconName(template),
         createdAt: nowIso(),
         updatedAt: nowIso(),
-      })).map(normalizeTemplate);
+      })).map((template) => normalizeTemplate(template));
       for (const template of seeded) {
         await saveTemplate(dir, template);
       }
@@ -1027,16 +1129,14 @@ export default function App() {
     if (!selectedTemplate || !libraryDir) return;
     const createdAt = nowIso();
     const values = valuesFromTemplate(selectedTemplate);
-    if (
-      selectedGroup &&
-      selectedTemplate.fields.some((field) => field.id === "group")
-    ) {
-      values.group = selectedGroup;
-    }
     const entry: KnowledgeEntry = {
       id: makeId("entry"),
       templateId: selectedTemplate.id,
       title: "未命名知识",
+      groupIds:
+        selectedGroup && selectedGroup !== ungroupedGroupId
+          ? [selectedGroup]
+          : [],
       values,
       translations: {
         [currentLanguage]: {
@@ -1141,6 +1241,24 @@ export default function App() {
               fieldId,
               value,
             )
+          : entry,
+      ),
+    );
+  }
+
+  function updateEntryGroups(groupIds: string[]) {
+    if (!selectedBaseEntry || !selectedTemplate) return;
+    const knownGroupIds = new Set(
+      (selectedTemplate.groupOptions ?? []).map((group) => group.id),
+    );
+    const nextGroupIds = [...new Set(groupIds)].filter((groupId) =>
+      knownGroupIds.has(groupId),
+    );
+    markEntryDirty(selectedBaseEntry.id);
+    setEntries((current) =>
+      current.map((entry) =>
+        entry.id === selectedBaseEntry.id
+          ? { ...entry, groupIds: nextGroupIds }
           : entry,
       ),
     );
@@ -1482,7 +1600,7 @@ export default function App() {
           <div className="section-title">
             <span>分组</span>
           </div>
-          {groups.length ? (
+          {groupRows.length ? (
             <>
             <button
               className={`group-row ${selectedGroup === "" ? "active" : ""}`}
@@ -1491,16 +1609,16 @@ export default function App() {
               <span>全部</span>
               <em>{templateEntries.length}</em>
             </button>
-            {groups.map(([group, count]) => (
+            {groupRows.map((group) => (
               <button
                 className={`group-row ${
-                  selectedGroup === group ? "active" : ""
+                  selectedGroup === group.id ? "active" : ""
                 }`}
-                key={group}
-                onClick={() => void guardActiveUnsaved(() => setSelectedGroup(group))}
+                key={group.id}
+                onClick={() => void guardActiveUnsaved(() => setSelectedGroup(group.id))}
               >
-                <span>{group}</span>
-                <em>{count}</em>
+                <span>{group.label}</span>
+                <em>{group.count}</em>
               </button>
             ))}
             </>
@@ -1530,7 +1648,7 @@ export default function App() {
         <div className="list-meta">
           <div>
             <span>共 {filteredEntries.length} 个条目</span>
-            {selectedGroup && <small>当前分组：{selectedGroup}</small>}
+            {selectedGroupLabel && <small>当前分组：{selectedGroupLabel}</small>}
           </div>
           <button
             className="list-new-button"
@@ -1590,8 +1708,14 @@ export default function App() {
                 </strong>
                 <span>
                   {selectedTemplate
-                    ? entryListDescription(selectedTemplate, entry) || entryGroup(entry)
-                    : entryGroup(entry)}
+                    ? entryListDescription(selectedTemplate, entry) ||
+                      entryGroupsText(
+                        selectedTemplate,
+                        entry,
+                        currentLanguage,
+                        fallbackLanguage,
+                      )
+                    : "未分组"}
                 </span>
                 <small>更新于 {formatDate(entry.updatedAt)}</small>
               </div>
@@ -1646,6 +1770,7 @@ export default function App() {
           onSave={handleSaveEntry}
           onSelectLanguage={(language) => void handleChangeLanguage(language)}
           onStatus={setStatus}
+          onUpdateGroups={updateEntryGroups}
           onUpdateValue={updateEntryValue}
           template={selectedTemplate}
           view={entryView}
@@ -2048,6 +2173,7 @@ function EntryEditor({
   onSave,
   onSelectLanguage,
   onStatus,
+  onUpdateGroups,
   onUpdateValue,
   template,
   view,
@@ -2064,6 +2190,7 @@ function EntryEditor({
   onSave: () => void;
   onSelectLanguage: (language: LanguageCode) => void;
   onStatus: (status: Status) => void;
+  onUpdateGroups: (groupIds: string[]) => void;
   onUpdateValue: (fieldId: string, value: unknown) => void;
   template?: KnowledgeTemplate;
   view: EntryView;
@@ -2095,6 +2222,7 @@ function EntryEditor({
     );
   }
 
+  const editableFields = template.fields.filter((field) => !isGroupField(field));
   const maybeEmpty = previewMayBeEmpty(template, entry);
 
   return (
@@ -2123,7 +2251,14 @@ function EntryEditor({
           </div>
         </div>
         <div className="field-stack">
-          {template.fields.map((field) => (
+          <EntryGroupsInput
+            entry={entry}
+            fallbackLanguage={fallbackLanguage}
+            language={language}
+            onChange={onUpdateGroups}
+            template={template}
+          />
+          {editableFields.map((field) => (
             <FieldInput
               entryId={entry.id}
               fallbackLanguage={fallbackLanguage}
@@ -2352,6 +2487,39 @@ function resolveMarkdownAssetPath(src: string, entry: KnowledgeEntry) {
   return withoutParentPrefix;
 }
 
+function EntryGroupsInput({
+  entry,
+  fallbackLanguage,
+  language,
+  onChange,
+  template,
+}: {
+  entry: KnowledgeEntry;
+  fallbackLanguage: LanguageCode;
+  language: LanguageCode;
+  onChange: (groupIds: string[]) => void;
+  template: KnowledgeTemplate;
+}) {
+  return (
+    <section className="entry-group-box">
+      <div className="entry-group-heading">
+        <strong>知识分组</strong>
+        <span>从分组配置中选择，可多选。</span>
+      </div>
+      <MultiSelectInput
+        emptyText="还没有分组，请先在类型的分组配置中添加。"
+        onChange={onChange}
+        options={groupOptionsAsFieldOptions(
+          template,
+          language,
+          fallbackLanguage,
+        )}
+        value={entryGroupIds(entry)}
+      />
+    </section>
+  );
+}
+
 function FieldInput({
   entryId,
   fallbackLanguage,
@@ -2533,10 +2701,12 @@ function FieldInput({
 }
 
 function MultiSelectInput({
+  emptyText = "还没有可选内容。",
   onChange,
   options,
   value,
 }: {
+  emptyText?: string;
   onChange: (value: string[]) => void;
   options: FieldOption[];
   value: string[];
@@ -2551,7 +2721,7 @@ function MultiSelectInput({
   }
 
   if (!options.length) {
-    return <div className="multi-select-empty">还没有可选内容。</div>;
+    return <div className="multi-select-empty">{emptyText}</div>;
   }
 
   return (
@@ -3178,6 +3348,12 @@ function TemplateDesigner({
         >
           选项配置
         </button>
+        <button
+          className={activeDesignerTab === "groups" ? "active" : ""}
+          onClick={() => setActiveDesignerTab("groups")}
+        >
+          分组配置
+        </button>
       </div>
       {activeDesignerTab === "fields" ? (
       <>
@@ -3498,7 +3674,7 @@ function TemplateDesigner({
         />
       </div>
       </>
-      ) : (
+      ) : activeDesignerTab === "options" ? (
       <OptionSetsDesigner
         draftTemplate={draftTemplate}
         onCopyTemplate={onCopyTemplate}
@@ -3506,6 +3682,163 @@ function TemplateDesigner({
         onSaveTemplate={onSaveTemplate}
         onUpdateDraft={onUpdateDraft}
       />
+      ) : (
+      <GroupOptionsDesigner
+        draftTemplate={draftTemplate}
+        onCopyTemplate={onCopyTemplate}
+        onDeleteTemplate={onDeleteTemplate}
+        onSaveTemplate={onSaveTemplate}
+        onUpdateDraft={onUpdateDraft}
+      />
+      )}
+    </div>
+  );
+}
+
+function GroupOptionsDesigner({
+  draftTemplate,
+  onCopyTemplate,
+  onDeleteTemplate,
+  onSaveTemplate,
+  onUpdateDraft,
+}: {
+  draftTemplate: KnowledgeTemplate;
+  onCopyTemplate: () => void;
+  onDeleteTemplate: () => void;
+  onSaveTemplate: () => void;
+  onUpdateDraft: (patch: Partial<KnowledgeTemplate>) => void;
+}) {
+  const groupOptions = draftTemplate.groupOptions ?? [];
+
+  function updateGroupOptions(nextGroups: TemplateGroupOption[]) {
+    onUpdateDraft({
+      groupOptions: normalizeTemplateGroups(nextGroups),
+    });
+  }
+
+  function addGroup() {
+    const index = groupOptions.length + 1;
+    updateGroupOptions([
+      ...groupOptions,
+      {
+        id: makeId("group"),
+        label: `分组 ${index}`,
+        translations: { [defaultLanguage]: `分组 ${index}` },
+      },
+    ]);
+  }
+
+  function updateGroup(index: number, patch: Partial<TemplateGroupOption>) {
+    updateGroupOptions(
+      groupOptions.map((group, groupIndex) =>
+        groupIndex === index ? normalizeGroupOption({ ...group, ...patch }) : group,
+      ),
+    );
+  }
+
+  function removeGroup(index: number) {
+    updateGroupOptions(groupOptions.filter((_, groupIndex) => groupIndex !== index));
+  }
+
+  function updateGroupLanguage(
+    index: number,
+    language: LanguageCode,
+    text: string,
+  ) {
+    const group = groupOptions[index];
+    if (!group) return;
+    const translations = { ...(group.translations ?? {}) };
+    if (text.trim()) {
+      translations[language] = text;
+    } else {
+      delete translations[language];
+    }
+    updateGroup(index, {
+      label: language === defaultLanguage ? text : group.label,
+      translations,
+    });
+  }
+
+  return (
+    <div className="designer-panel group-options-panel">
+      <div className="panel-heading">
+        <div>
+          <span>分组配置</span>
+          <strong>先创建分组，知识编辑时再选择</strong>
+        </div>
+        <div className="button-row">
+          <button onClick={addGroup}>
+            <Plus size={16} />
+            添加分组
+          </button>
+          <button onClick={onCopyTemplate}>
+            <Copy size={16} />
+            复制
+          </button>
+          <button onClick={onSaveTemplate}>
+            <Save size={16} />
+            保存类型
+          </button>
+          <button className="danger-ghost" onClick={onDeleteTemplate}>
+            <Trash2 size={16} />
+            删除
+          </button>
+        </div>
+      </div>
+
+      {groupOptions.length === 0 ? (
+        <div className="option-empty">
+          <ListTree size={28} />
+          <span>还没有分组。</span>
+        </div>
+      ) : (
+        <div className="group-option-list">
+          {groupOptions.map((group, groupIndex) => (
+            <section className="group-option-card" key={group.id}>
+              <div className="group-option-main">
+                <label>
+                  分组 ID
+                  <input disabled value={group.id} />
+                </label>
+                <div>
+                  <span>当前显示</span>
+                  <strong>
+                    {groupOptionLabel(group, defaultLanguage, defaultLanguage)}
+                  </strong>
+                </div>
+                <button
+                  className="danger-ghost"
+                  onClick={() => removeGroup(groupIndex)}
+                  title="删除分组"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+
+              <div className="option-locales">
+                {supportedLanguages.map((language) => (
+                  <label key={language.code}>
+                    <span className={`language-flag flag-${language.code}`} />
+                    {language.label}
+                    <input
+                      value={
+                        group.translations?.[language.code] ??
+                        (language.code === defaultLanguage ? group.label : "")
+                      }
+                      onChange={(event) =>
+                        updateGroupLanguage(
+                          groupIndex,
+                          language.code,
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       )}
     </div>
   );

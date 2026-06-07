@@ -9,6 +9,7 @@ import type {
   KnowledgeEntryTranslation,
   KnowledgeTemplate,
   KnowledgeTemplateTranslation,
+  TemplateGroupOption,
   TemplateOptionSet,
 } from "./types";
 
@@ -84,6 +85,7 @@ export function mergeTemplateLanguage(
       iconFieldId: draft.iconFieldId,
       descriptionFieldId: draft.descriptionFieldId,
       optionSets: cloneOptionSets(draft.optionSets),
+      groupOptions: cloneGroupOptions(draft.groupOptions),
       translations,
       updatedAt: draft.updatedAt,
     };
@@ -98,6 +100,7 @@ export function mergeTemplateLanguage(
     iconFieldId: draft.iconFieldId,
     descriptionFieldId: draft.descriptionFieldId,
     optionSets: cloneOptionSets(draft.optionSets),
+    groupOptions: cloneGroupOptions(draft.groupOptions),
     fields: mergeSharedFields(base.fields, draft.fields),
     translations,
     updatedAt: draft.updatedAt,
@@ -207,6 +210,12 @@ function cloneFields(fields: FieldDefinition[]) {
 function cloneOptionSets(optionSets?: TemplateOptionSet[]) {
   return optionSets
     ? (JSON.parse(JSON.stringify(optionSets)) as TemplateOptionSet[])
+    : undefined;
+}
+
+function cloneGroupOptions(groupOptions?: TemplateGroupOption[]) {
+  return groupOptions
+    ? (JSON.parse(JSON.stringify(groupOptions)) as TemplateGroupOption[])
     : undefined;
 }
 
