@@ -1875,6 +1875,12 @@ textarea {
   resize: vertical;
 }
 
+.markdown-template-panel textarea[readonly] {
+  color: var(--text);
+  background: var(--panel-soft);
+  cursor: default;
+}
+
 .option-sets-panel {
   margin: 14px 18px 26px;
 }

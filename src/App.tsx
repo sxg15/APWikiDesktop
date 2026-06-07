@@ -90,6 +90,7 @@ import {
   entryListDescription,
   entryTitle,
   formatDate,
+  generatedMarkdownTemplate,
   renderMarkdownTemplate,
   valuesFromTemplate,
 } from "./markdown";
@@ -436,7 +437,6 @@ function templateTranslationHasContent(
       placeholder: field.placeholder,
       options: field.options,
     })),
-    markdownTemplate: template.markdownTemplate,
   });
 }
 
@@ -470,20 +470,16 @@ function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
     normalizedFields,
     template.optionSets,
   );
+  const normalizedTemplate = {
+    ...template,
+    titleFieldId: normalizeFieldId(template.titleFieldId),
+    fields: choiceConfig.fields,
+  };
   const translations = template.translations
     ? Object.fromEntries(
         Object.entries(template.translations).map(([language, translation]) => [
           language,
-          translation
-            ? {
-                ...translation,
-                fields: translation.fields?.map(normalizeField),
-                markdownTemplate:
-                  translation.markdownTemplate === undefined
-                    ? undefined
-                    : normalizeMarkdownTemplate(translation.markdownTemplate),
-              }
-            : translation,
+          normalizeTemplateTranslation(normalizedTemplate, translation),
         ]),
       )
     : undefined;
@@ -491,14 +487,30 @@ function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
     ...template,
     color: template.color || "#0f7c80",
     description: template.description ?? "",
-    titleFieldId: normalizeFieldId(template.titleFieldId),
+    titleFieldId: normalizedTemplate.titleFieldId,
     iconFieldId: normalizeFieldId(template.iconFieldId),
     descriptionFieldId: normalizeFieldId(template.descriptionFieldId),
     icon: templateIconName(template),
     fields: choiceConfig.fields,
     optionSets: choiceConfig.optionSets,
     translations: translations as KnowledgeTemplate["translations"],
-    markdownTemplate: normalizeMarkdownTemplate(template.markdownTemplate),
+    markdownTemplate: generatedMarkdownTemplate(normalizedTemplate),
+  };
+}
+
+function normalizeTemplateTranslation(
+  baseTemplate: Pick<KnowledgeTemplate, "fields" | "titleFieldId">,
+  translation: KnowledgeTemplateTranslation | undefined,
+) {
+  if (!translation) return translation;
+  const fields = translation.fields?.map(normalizeField);
+  return {
+    ...translation,
+    fields,
+    markdownTemplate: generatedMarkdownTemplate({
+      ...baseTemplate,
+      fields: fields ?? baseTemplate.fields,
+    }),
   };
 }
 
@@ -541,12 +553,6 @@ function normalizeField(field: FieldDefinition): FieldDefinition {
     };
   }
   return field;
-}
-
-function normalizeMarkdownTemplate(markdownTemplate: string) {
-  return markdownTemplate
-      .replace(/分类：\{\{\s*category\s*\}\}/g, "分组：{{group}}")
-      .replace(/\{\{\s*category\s*\}\}/g, "{{group}}");
 }
 
 function normalizeEntry(entry: KnowledgeEntry, template?: KnowledgeTemplate): KnowledgeEntry {
@@ -1156,11 +1162,14 @@ export default function App() {
           placeholder: "输入名称",
         },
       ],
-      markdownTemplate: "# {{name}}\n\n{{description}}",
+      markdownTemplate: "",
       createdAt,
       updatedAt: createdAt,
     };
-    setDraftTemplate(template);
+    setDraftTemplate({
+      ...template,
+      markdownTemplate: generatedMarkdownTemplate(template),
+    });
     setTemplateDirty(true);
     setTemplateEditorOpen(true);
   }
@@ -1176,6 +1185,7 @@ export default function App() {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
+    copied.markdownTemplate = generatedMarkdownTemplate(copied);
     await saveTemplate(libraryDir, copied);
     setTemplates((current) => [...current, copied]);
     setSelectedTemplateId(copied.id);
@@ -1211,6 +1221,7 @@ export default function App() {
     const next = mergeTemplateLanguage(baseTemplate, {
       ...draftTemplate,
       icon: templateIconName(draftTemplate),
+      markdownTemplate: generatedMarkdownTemplate(draftTemplate),
       updatedAt: nowIso(),
     }, currentLanguage);
     await saveTemplate(libraryDir, next);
@@ -3443,14 +3454,13 @@ function TemplateDesigner({
         <div className="panel-heading">
           <div>
             <span>Markdown 查看样式</span>
-            <strong>占位符会被知识内容替换</strong>
+            <strong>由字段自动生成</strong>
           </div>
         </div>
         <textarea
-          value={draftTemplate.markdownTemplate}
-          onChange={(event) =>
-            onUpdateDraft({ markdownTemplate: event.target.value })
-          }
+          aria-label="Markdown 查看样式"
+          readOnly
+          value={generatedMarkdownTemplate(draftTemplate)}
         />
       </div>
       </>

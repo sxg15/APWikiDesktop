@@ -111,11 +111,12 @@ export function renderMarkdownTemplate(
   language: LanguageCode = defaultLanguage,
   fallbackLanguage: LanguageCode = defaultLanguage,
 ) {
+  const markdownTemplate = generatedMarkdownTemplate(template);
   const byId = new Map(template.fields.map((field) => [field.id, field]));
   const byLabel = new Map(template.fields.map((field) => [field.label, field]));
   const autoAppendFields = template.fields.filter(isAutoAppendField);
 
-  const rendered = template.markdownTemplate.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => {
+  const rendered = markdownTemplate.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => {
     const normalized = String(key).trim();
     if (normalized === "title") return entryTitle(template, entry);
     if (normalized === "templateName") return template.name;
@@ -134,7 +135,7 @@ export function renderMarkdownTemplate(
     );
   });
   const missingBlocks = autoAppendFields
-    .filter((field) => !templateUsesField(template.markdownTemplate, field))
+    .filter((field) => !templateUsesField(markdownTemplate, field))
     .filter((field) => fieldHasPreviewValue(field, entry.values[field.id]))
     .map((field) =>
       formatValue(
@@ -148,6 +149,25 @@ export function renderMarkdownTemplate(
     )
     .filter(Boolean);
   return insertAfterFirstHeading(rendered, missingBlocks.join("\n\n"));
+}
+
+export function generatedMarkdownTemplate(template: Pick<KnowledgeTemplate, "fields" | "titleFieldId">) {
+  const titleField =
+    template.fields.find((field) => field.id === template.titleFieldId) ??
+    template.fields.find((field) => field.type === "text") ??
+    template.fields[0];
+  const lines = [`# ${titleField ? fieldPlaceholder(titleField) : "{{title}}"}`];
+
+  for (const field of template.fields) {
+    lines.push("");
+    if (isSectionField(field)) {
+      lines.push(`## ${fieldTitle(field)}`, "", fieldPlaceholder(field));
+    } else {
+      lines.push(`${fieldTitle(field)}：${fieldPlaceholder(field)}`);
+    }
+  }
+
+  return lines.join("\n").trimEnd();
 }
 
 export function formatDate(value: string) {
@@ -249,6 +269,26 @@ function isRichImageField(field: FieldDefinition) {
 
 function isAutoAppendField(field: FieldDefinition) {
   return isRichImageField(field) || field.type === "tileSize";
+}
+
+function isSectionField(field: FieldDefinition) {
+  return (
+    field.type === "textarea" ||
+    field.type === "markdown" ||
+    field.type === "parameterTable" ||
+    field.type === "richImage" ||
+    field.type === "image" ||
+    field.type === "frameSequence" ||
+    field.type === "tileSize"
+  );
+}
+
+function fieldTitle(field: FieldDefinition) {
+  return field.label.trim() || field.id;
+}
+
+function fieldPlaceholder(field: FieldDefinition) {
+  return `{{${field.id}}}`;
 }
 
 function fieldHasPreviewValue(field: FieldDefinition, value: unknown) {

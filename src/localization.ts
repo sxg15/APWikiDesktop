@@ -1,4 +1,5 @@
 import { defaultLanguage, type LanguageCode } from "./i18n";
+import { generatedMarkdownTemplate } from "./markdown";
 import { normalizeRichImageValue, richImageHasFrames } from "./richImage";
 import { normalizeTileSizeValue, tileSizeHasCells } from "./tileSize";
 import type {
@@ -21,20 +22,21 @@ export function localizeTemplate(
     language === fallbackLanguage
       ? fallback
       : templateTranslation(template, language) ?? fallback;
+  const fields = localizeFields(
+    template.fields,
+    fallback?.fields,
+    selected?.fields,
+  );
   return {
     ...template,
     name: selected?.name ?? fallback?.name ?? template.name,
     description:
       selected?.description ?? fallback?.description ?? template.description,
-    fields: localizeFields(
-      template.fields,
-      fallback?.fields,
-      selected?.fields,
-    ),
-    markdownTemplate:
-      selected?.markdownTemplate ??
-      fallback?.markdownTemplate ??
-      template.markdownTemplate,
+    fields,
+    markdownTemplate: generatedMarkdownTemplate({
+      ...template,
+      fields,
+    }),
   };
 }
 
@@ -177,7 +179,7 @@ function templateLanguagePayload(
     name: template.name,
     description: template.description,
     fields: cloneFields(template.fields),
-    markdownTemplate: template.markdownTemplate,
+    markdownTemplate: generatedMarkdownTemplate(template),
   };
 }
 
