@@ -1097,11 +1097,6 @@ textarea {
   padding: 0 10px;
 }
 
-.form-field select[multiple] {
-  height: 96px;
-  padding: 8px;
-}
-
 .form-field textarea {
   padding: 10px 11px;
   line-height: 1.6;
@@ -1152,6 +1147,56 @@ textarea {
 
 .switch input:checked + span::after {
   transform: translateX(20px);
+}
+
+.multi-select-options {
+  display: grid;
+  gap: 8px;
+}
+
+.multi-select-option {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  user-select: none;
+}
+
+.multi-select-option.checked {
+  border-color: rgba(15, 124, 128, 0.42);
+  background: #eefafa;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.multi-select-option input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.multi-select-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-empty {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  padding: 0 11px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--panel-soft);
 }
 
 .parameter-table {

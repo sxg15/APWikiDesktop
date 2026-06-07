@@ -115,6 +115,7 @@ import {
 } from "./tileSize";
 import type {
   FieldDefinition,
+  FieldOption,
   FieldType,
   KnowledgeEntry,
   KnowledgeTemplate,
@@ -2443,23 +2444,11 @@ function FieldInput({
     return (
       <div className="form-field">
         {label}
-        <select
-          multiple
+        <MultiSelectInput
+          onChange={(nextValue) => onChange(nextValue)}
+          options={choiceOptions}
           value={selected}
-          onChange={(event) =>
-            onChange(
-              Array.from(event.target.selectedOptions).map(
-                (option) => option.value,
-              ),
-            )
-          }
-        >
-          {choiceOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        />
       </div>
     );
   }
@@ -2539,6 +2528,51 @@ function FieldInput({
           )
         }
       />
+    </div>
+  );
+}
+
+function MultiSelectInput({
+  onChange,
+  options,
+  value,
+}: {
+  onChange: (value: string[]) => void;
+  options: FieldOption[];
+  value: string[];
+}) {
+  const selected = new Set(value);
+
+  function toggleOption(optionValue: string, checked: boolean) {
+    const next = checked
+      ? [...value.filter((item) => item !== optionValue), optionValue]
+      : value.filter((item) => item !== optionValue);
+    onChange(next);
+  }
+
+  if (!options.length) {
+    return <div className="multi-select-empty">还没有可选内容。</div>;
+  }
+
+  return (
+    <div className="multi-select-options">
+      {options.map((option) => (
+        <label
+          className={`multi-select-option ${
+            selected.has(option.value) ? "checked" : ""
+          }`}
+          key={option.value}
+        >
+          <input
+            checked={selected.has(option.value)}
+            type="checkbox"
+            onChange={(event) =>
+              toggleOption(option.value, event.target.checked)
+            }
+          />
+          <span>{option.label}</span>
+        </label>
+      ))}
     </div>
   );
 }
