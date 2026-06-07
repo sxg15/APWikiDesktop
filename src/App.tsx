@@ -4,7 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type DragEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
@@ -2991,37 +2991,69 @@ function TemplateDesigner({
 }) {
   const [draggingFieldIndex, setDraggingFieldIndex] = useState<number | null>(null);
   const [dragOverFieldIndex, setDragOverFieldIndex] = useState<number | null>(null);
+  const fieldListRef = useRef<HTMLDivElement>(null);
+  const draggingFieldIndexRef = useRef<number | null>(null);
+  const dragOverFieldIndexRef = useRef<number | null>(null);
 
-  function handleFieldDragStart(
-    event: DragEvent<HTMLElement>,
+  function updateFieldDragOver(index: number | null) {
+    dragOverFieldIndexRef.current = index;
+    setDragOverFieldIndex(index);
+  }
+
+  function fieldIndexFromPoint(clientY: number) {
+    const cards = Array.from(
+      fieldListRef.current?.querySelectorAll<HTMLElement>(
+        ".field-designer-card",
+      ) ?? [],
+    );
+    if (!cards.length) return null;
+
+    let closestIndex = 0;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const [index, card] of cards.entries()) {
+      const rect = card.getBoundingClientRect();
+      const distance = Math.abs(clientY - (rect.top + rect.height / 2));
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    }
+    return closestIndex;
+  }
+
+  function handleFieldPointerDown(
+    event: ReactPointerEvent<HTMLElement>,
     index: number,
   ) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    draggingFieldIndexRef.current = index;
     setDraggingFieldIndex(index);
-    setDragOverFieldIndex(index);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", String(index));
+    updateFieldDragOver(index);
   }
 
-  function handleFieldDragOver(event: DragEvent<HTMLDivElement>, index: number) {
+  function handleFieldPointerMove(event: ReactPointerEvent<HTMLElement>) {
+    if (draggingFieldIndexRef.current === null) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setDragOverFieldIndex(index);
+    updateFieldDragOver(fieldIndexFromPoint(event.clientY));
   }
 
-  function handleFieldDrop(event: DragEvent<HTMLDivElement>, index: number) {
+  function handleFieldPointerUp(event: ReactPointerEvent<HTMLElement>) {
+    if (draggingFieldIndexRef.current === null) return;
     event.preventDefault();
-    const transferredIndex = Number(event.dataTransfer.getData("text/plain"));
-    const fromIndex = Number.isInteger(transferredIndex)
-      ? transferredIndex
-      : draggingFieldIndex;
-    if (fromIndex !== null && fromIndex !== index) {
-      onReorderField(fromIndex, index);
+    const fromIndex = draggingFieldIndexRef.current;
+    const toIndex =
+      dragOverFieldIndexRef.current ?? fieldIndexFromPoint(event.clientY);
+    if (toIndex !== null && fromIndex !== toIndex) {
+      onReorderField(fromIndex, toIndex);
     }
-    setDraggingFieldIndex(null);
-    setDragOverFieldIndex(null);
+    clearFieldDragState();
   }
 
   function clearFieldDragState() {
+    draggingFieldIndexRef.current = null;
+    dragOverFieldIndexRef.current = null;
     setDraggingFieldIndex(null);
     setDragOverFieldIndex(null);
   }
@@ -3215,7 +3247,7 @@ function TemplateDesigner({
             添加字段
           </button>
         </div>
-        <div className="field-designer-list">
+        <div className="field-designer-list" ref={fieldListRef}>
           {draftTemplate.fields.map((field, index) => (
             <div
               className={`field-designer-card ${
@@ -3228,18 +3260,14 @@ function TemplateDesigner({
               data-field-id={field.id}
               data-field-index={index}
               key={index}
-              onDragEnd={clearFieldDragState}
-              onDragLeave={() => {
-                if (dragOverFieldIndex === index) setDragOverFieldIndex(null);
-              }}
-              onDragOver={(event) => handleFieldDragOver(event, index)}
-              onDrop={(event) => handleFieldDrop(event, index)}
             >
               <div className="field-card-top">
                 <span
                   className="field-drag-handle"
-                  draggable
-                  onDragStart={(event) => handleFieldDragStart(event, index)}
+                  onPointerCancel={clearFieldDragState}
+                  onPointerDown={(event) => handleFieldPointerDown(event, index)}
+                  onPointerMove={handleFieldPointerMove}
+                  onPointerUp={handleFieldPointerUp}
                   role="button"
                   tabIndex={0}
                   title="拖动调整位置"

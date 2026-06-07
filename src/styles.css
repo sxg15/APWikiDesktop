@@ -1789,6 +1789,9 @@ textarea {
 
 .field-card-top .field-drag-handle {
   cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .field-card-top .field-drag-handle:active {
