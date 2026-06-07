@@ -296,7 +296,7 @@ function EntryListIcon({
   }, [iconAssetPathKey, iconAssetPaths, libraryDir]);
 
   useEffect(() => {
-    if (entryIconFrames.length <= 1 || richImage.mode !== "sequence") return;
+    if (entryIconFrames.length <= 1) return;
     const timer = window.setInterval(() => {
       setFrameIndex((current) => {
         if (current >= entryIconFrames.length - 1) {

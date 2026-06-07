@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateSync } from "node:zlib";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const unityExe =
@@ -97,12 +98,11 @@ function exportTiles() {
 
   try {
     runUnityExport();
-    return {
-      report: readJson(join(exportDir, "export_report.json")),
-      index: readJson(join(exportDir, "tile_index.json")),
-    };
+    return readExportResult();
   } catch (error) {
-    return exportTilesWithShadowFallback(String(error?.message || error));
+    console.warn(String(error?.message || error));
+    console.warn("Falling back to direct asset parsing because Unity export is unavailable.");
+    return exportTilesFromYaml();
   }
 }
 
@@ -110,15 +110,19 @@ function exportTilesWithShadowFallback(reason) {
   console.warn(reason);
   try {
     runUnityExportWithShadowProject();
-    return {
-      report: readJson(join(exportDir, "export_report.json")),
-      index: readJson(join(exportDir, "tile_index.json")),
-    };
+    return readExportResult();
   } catch (shadowError) {
     console.warn(String(shadowError?.message || shadowError));
     console.warn("Falling back to direct asset parsing because Unity shadow export is unavailable.");
     return exportTilesFromYaml();
   }
+}
+
+function readExportResult() {
+  const report = readJson(join(exportDir, "export_report.json"));
+  const index = readJson(join(exportDir, "tile_index.json"));
+  assertNoPlaceholderIconSprites(Array.isArray(index.tiles) ? index.tiles : []);
+  return { report, index };
 }
 
 function runUnityExport(projectPath = unityProject) {
@@ -228,6 +232,7 @@ function exportTilesFromYaml() {
     tiles,
   };
 
+  assertNoPlaceholderIconSprites(tiles);
   writeJson(join(exportDir, "export_report.json"), report);
   writeJson(join(exportDir, "tile_index.json"), index);
   return { report, index };
@@ -560,6 +565,170 @@ function selectIconSprites(tile) {
   };
 }
 
+function assertNoPlaceholderIconSprites(tiles) {
+  const placeholders = [];
+  for (const tile of tiles) {
+    const selection = selectIconSprites(tile);
+    for (const sprite of selection.sprites) {
+      const source = resolveExportPath(sprite.path);
+      const stats = readPngStats(source);
+      if (stats?.isUnityBatchPlaceholderGray) {
+        placeholders.push(`${tile.tileName}: ${sprite.path}`);
+        if (placeholders.length >= 12) break;
+      }
+    }
+    if (placeholders.length >= 12) break;
+  }
+
+  if (placeholders.length > 0) {
+    throw new Error(
+      [
+        "Unity exported placeholder-gray tile icons instead of real pixels.",
+        ...placeholders.map((item) => `- ${item}`),
+      ].join("\n"),
+    );
+  }
+}
+
+function readPngStats(path) {
+  const bytes = readFileSync(path);
+  const signature = "89504e470d0a1a0a";
+  if (bytes.subarray(0, 8).toString("hex") !== signature) return null;
+
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  let interlace = 0;
+  let palette = null;
+  let transparency = null;
+  const idat = [];
+
+  while (offset + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    const type = bytes.subarray(offset + 4, offset + 8).toString("ascii");
+    const data = bytes.subarray(offset + 8, offset + 8 + length);
+    offset += 12 + length;
+
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      interlace = data[12];
+    } else if (type === "PLTE") {
+      palette = data;
+    } else if (type === "tRNS") {
+      transparency = data;
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+  }
+
+  if (bitDepth !== 8 || interlace !== 0 || width <= 0 || height <= 0 || idat.length === 0) {
+    return null;
+  }
+
+  const channels = pngChannels(colorType);
+  if (!channels) return null;
+
+  const inflated = inflateSync(Buffer.concat(idat));
+  const rowBytes = width * channels;
+  const pixels = Buffer.alloc(rowBytes * height);
+  let sourceOffset = 0;
+  let targetOffset = 0;
+
+  for (let y = 0; y < height; y++) {
+    const filter = inflated[sourceOffset++];
+    for (let x = 0; x < rowBytes; x++) {
+      const raw = inflated[sourceOffset++];
+      const left = x >= channels ? pixels[targetOffset + x - channels] : 0;
+      const up = y > 0 ? pixels[targetOffset + x - rowBytes] : 0;
+      const upLeft = y > 0 && x >= channels ? pixels[targetOffset + x - rowBytes - channels] : 0;
+      pixels[targetOffset + x] = unfilterPngByte(filter, raw, left, up, upLeft);
+    }
+    targetOffset += rowBytes;
+  }
+
+  const unique = new Set();
+  for (let i = 0; i < width * height; i++) {
+    const color = pngPixelRgba(pixels, i, colorType, palette, transparency);
+    if (!color) return null;
+    unique.add(color.join(","));
+    if (unique.size > 1) break;
+  }
+
+  const onlyColor = unique.size === 1 ? [...unique][0].split(",").map(Number) : null;
+  return {
+    width,
+    height,
+    uniqueColors: unique.size,
+    isUnityBatchPlaceholderGray:
+      Boolean(onlyColor) &&
+      onlyColor[0] === 205 &&
+      onlyColor[1] === 205 &&
+      onlyColor[2] === 205 &&
+      onlyColor[3] === 205,
+  };
+}
+
+function pngChannels(colorType) {
+  if (colorType === 0) return 1;
+  if (colorType === 2) return 3;
+  if (colorType === 3) return 1;
+  if (colorType === 6) return 4;
+  return 0;
+}
+
+function pngPixelRgba(pixels, index, colorType, palette, transparency) {
+  if (colorType === 6) {
+    const offset = index * 4;
+    return [pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]];
+  }
+  if (colorType === 2) {
+    const offset = index * 3;
+    return [pixels[offset], pixels[offset + 1], pixels[offset + 2], 255];
+  }
+  if (colorType === 0) {
+    const value = pixels[index];
+    return [value, value, value, 255];
+  }
+  if (colorType === 3 && palette) {
+    const paletteIndex = pixels[index];
+    const offset = paletteIndex * 3;
+    if (offset + 2 >= palette.length) return null;
+    return [
+      palette[offset],
+      palette[offset + 1],
+      palette[offset + 2],
+      transparency && paletteIndex < transparency.length ? transparency[paletteIndex] : 255,
+    ];
+  }
+  return null;
+}
+
+function unfilterPngByte(filter, raw, left, up, upLeft) {
+  if (filter === 0) return raw;
+  if (filter === 1) return (raw + left) & 0xff;
+  if (filter === 2) return (raw + up) & 0xff;
+  if (filter === 3) return (raw + Math.floor((left + up) / 2)) & 0xff;
+  if (filter === 4) return (raw + paeth(left, up, upLeft)) & 0xff;
+  throw new Error(`Unsupported PNG filter: ${filter}`);
+}
+
+function paeth(left, up, upLeft) {
+  const estimate = left + up - upLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const upLeftDistance = Math.abs(estimate - upLeft);
+  if (leftDistance <= upDistance && leftDistance <= upLeftDistance) return left;
+  if (upDistance <= upLeftDistance) return up;
+  return upLeft;
+}
+
 function validateEntries(entriesDir, tiles, report) {
   const folders = readdirSync(entriesDir, { withFileTypes: true }).filter((item) =>
     item.isDirectory(),
@@ -585,7 +754,12 @@ function validateEntries(entriesDir, tiles, report) {
       throw new Error(`Sequence icon has fewer than two frames: ${folder.name}`);
     }
     for (const frame of icon.frames) {
-      assertFile(join(libraryDir, frame), `entry icon frame ${frame}`);
+      const framePath = join(libraryDir, frame);
+      assertFile(framePath, `entry icon frame ${frame}`);
+      const stats = readPngStats(framePath);
+      if (stats?.isUnityBatchPlaceholderGray) {
+        throw new Error(`Entry icon is placeholder gray instead of real pixels: ${frame}`);
+      }
     }
   }
 }
