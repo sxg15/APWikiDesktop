@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri:dev": "tauri dev",
-    "publish": "node scripts/publish.mjs"
+    "publish": "node scripts/publish.mjs",
+    "sync:abya-tiles": "node scripts/sync-abya-tiles.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
