@@ -28,6 +28,20 @@ export interface FieldDefinition {
   placeholder?: string;
   defaultValue?: unknown;
   options?: FieldOption[];
+  optionSetId?: string;
+}
+
+export interface TemplateOptionItem {
+  id: string;
+  value: string;
+  label: string;
+  translations?: Partial<Record<LanguageCode, string>>;
+}
+
+export interface TemplateOptionSet {
+  id: string;
+  name: string;
+  items: TemplateOptionItem[];
 }
 
 export interface KnowledgeTemplate {
@@ -41,6 +55,7 @@ export interface KnowledgeTemplate {
   descriptionFieldId?: string;
   color: string;
   fields: FieldDefinition[];
+  optionSets?: TemplateOptionSet[];
   markdownTemplate: string;
   translations?: Partial<Record<LanguageCode, KnowledgeTemplateTranslation>>;
   createdAt: string;

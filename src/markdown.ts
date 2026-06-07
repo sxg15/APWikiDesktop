@@ -1,4 +1,9 @@
 import type {
+  LanguageCode,
+} from "./i18n";
+import { defaultLanguage } from "./i18n";
+import { fieldOptionsForTemplate } from "./options";
+import type {
   FieldDefinition,
   KnowledgeEntry,
   KnowledgeTemplate,
@@ -103,6 +108,8 @@ export function entryIconRichImage(
 export function renderMarkdownTemplate(
   template: KnowledgeTemplate,
   entry: KnowledgeEntry,
+  language: LanguageCode = defaultLanguage,
+  fallbackLanguage: LanguageCode = defaultLanguage,
 ) {
   const byId = new Map(template.fields.map((field) => [field.id, field]));
   const byLabel = new Map(template.fields.map((field) => [field.label, field]));
@@ -117,12 +124,28 @@ export function renderMarkdownTemplate(
 
     const field = byId.get(normalized) ?? byLabel.get(normalized);
     if (!field) return "";
-    return formatValue(field, entry.values[field.id], entry);
+    return formatValue(
+      field,
+      entry.values[field.id],
+      entry,
+      template,
+      language,
+      fallbackLanguage,
+    );
   });
   const missingBlocks = autoAppendFields
     .filter((field) => !templateUsesField(template.markdownTemplate, field))
     .filter((field) => fieldHasPreviewValue(field, entry.values[field.id]))
-    .map((field) => formatValue(field, entry.values[field.id], entry))
+    .map((field) =>
+      formatValue(
+        field,
+        entry.values[field.id],
+        entry,
+        template,
+        language,
+        fallbackLanguage,
+      ),
+    )
     .filter(Boolean);
   return insertAfterFirstHeading(rendered, missingBlocks.join("\n\n"));
 }
@@ -134,10 +157,30 @@ export function formatDate(value: string) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-function formatValue(field: FieldDefinition, value: unknown, entry: KnowledgeEntry) {
+function formatValue(
+  field: FieldDefinition,
+  value: unknown,
+  entry: KnowledgeEntry,
+  template: KnowledgeTemplate,
+  language: LanguageCode,
+  fallbackLanguage: LanguageCode,
+) {
   if (field.type === "parameterTable") return formatParameterTable(value);
-  if (field.type === "tags" || field.type === "multiselect") {
+  if (field.type === "tags") {
     return Array.isArray(value) ? value.filter(Boolean).join("，") : "";
+  }
+  if (field.type === "select") {
+    return optionLabelForValue(field, value, template, language, fallbackLanguage);
+  }
+  if (field.type === "multiselect") {
+    return Array.isArray(value)
+      ? value
+          .map((item) =>
+            optionLabelForValue(field, item, template, language, fallbackLanguage),
+          )
+          .filter(Boolean)
+          .join("，")
+      : "";
   }
   if (
     field.type === "richImage" ||
@@ -150,6 +193,24 @@ function formatValue(field: FieldDefinition, value: unknown, entry: KnowledgeEnt
   if (field.type === "boolean") return value ? "是" : "否";
   if (value === null || value === undefined) return "";
   return String(value);
+}
+
+function optionLabelForValue(
+  field: FieldDefinition,
+  value: unknown,
+  template: KnowledgeTemplate,
+  language: LanguageCode,
+  fallbackLanguage: LanguageCode,
+) {
+  const raw = String(value ?? "");
+  if (!raw) return "";
+  const option = fieldOptionsForTemplate(
+    field,
+    template,
+    language,
+    fallbackLanguage,
+  ).find((item) => item.value === raw);
+  return option?.label ?? raw;
 }
 
 function formatRichImage(

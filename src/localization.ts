@@ -8,6 +8,7 @@ import type {
   KnowledgeEntryTranslation,
   KnowledgeTemplate,
   KnowledgeTemplateTranslation,
+  TemplateOptionSet,
 } from "./types";
 
 export function localizeTemplate(
@@ -80,6 +81,7 @@ export function mergeTemplateLanguage(
       titleFieldId: draft.titleFieldId,
       iconFieldId: draft.iconFieldId,
       descriptionFieldId: draft.descriptionFieldId,
+      optionSets: cloneOptionSets(draft.optionSets),
       translations,
       updatedAt: draft.updatedAt,
     };
@@ -93,6 +95,7 @@ export function mergeTemplateLanguage(
     titleFieldId: draft.titleFieldId,
     iconFieldId: draft.iconFieldId,
     descriptionFieldId: draft.descriptionFieldId,
+    optionSets: cloneOptionSets(draft.optionSets),
     fields: mergeSharedFields(base.fields, draft.fields),
     translations,
     updatedAt: draft.updatedAt,
@@ -190,12 +193,19 @@ function mergeSharedFields(
       type: field.type,
       required: field.required,
       defaultValue: field.defaultValue,
+      optionSetId: field.optionSetId,
     };
   });
 }
 
 function cloneFields(fields: FieldDefinition[]) {
   return JSON.parse(JSON.stringify(fields)) as FieldDefinition[];
+}
+
+function cloneOptionSets(optionSets?: TemplateOptionSet[]) {
+  return optionSets
+    ? (JSON.parse(JSON.stringify(optionSets)) as TemplateOptionSet[])
+    : undefined;
 }
 
 function localizeFields(

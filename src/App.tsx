@@ -94,6 +94,14 @@ import {
   valuesFromTemplate,
 } from "./markdown";
 import {
+  fieldOptionsForTemplate,
+  isChoiceField,
+  normalizeChoiceConfig,
+  normalizeOptionItem,
+  normalizeOptionSet,
+  optionItemLabel,
+} from "./options";
+import {
   defaultRichImageValue,
   normalizeRichImageValue,
   richImageFrameDelay,
@@ -106,18 +114,20 @@ import {
 } from "./tileSize";
 import type {
   FieldDefinition,
-  FieldOption,
   FieldType,
   KnowledgeEntry,
   KnowledgeTemplate,
   KnowledgeTemplateTranslation,
   ParameterRow,
   RichImageValue,
+  TemplateOptionItem,
+  TemplateOptionSet,
   TileSizeValue,
 } from "./types";
 
 type EntryView = "edit" | "preview";
 type SettingsTab = "library" | "language" | "layout" | "about";
+type TemplateDesignerTab = "fields" | "options";
 type Status = { tone: "ok" | "warn"; text: string } | undefined;
 type UnsavedChoice = "cancel" | "save" | "discard";
 type UnsavedScope = "entry" | "template";
@@ -328,18 +338,6 @@ function safeFileName(value: string) {
   return `${value.trim() || "未命名知识"}.md`.replace(/[\\/:*?"<>|]/g, "_");
 }
 
-function optionsToText(options?: FieldOption[]) {
-  return (options ?? []).map((option) => option.label).join("，");
-}
-
-function textToOptions(value: string): FieldOption[] {
-  return value
-    .split(/[，,]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => ({ label: item, value: item }));
-}
-
 function requiredMissing(field: FieldDefinition, value: unknown) {
   if (!field.required) return false;
   if (
@@ -467,6 +465,11 @@ function templateLanguageEmptyMap(
 }
 
 function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
+  const normalizedFields = template.fields.map(normalizeField);
+  const choiceConfig = normalizeChoiceConfig(
+    normalizedFields,
+    template.optionSets,
+  );
   const translations = template.translations
     ? Object.fromEntries(
         Object.entries(template.translations).map(([language, translation]) => [
@@ -492,7 +495,8 @@ function normalizeTemplate(template: KnowledgeTemplate): KnowledgeTemplate {
     iconFieldId: normalizeFieldId(template.iconFieldId),
     descriptionFieldId: normalizeFieldId(template.descriptionFieldId),
     icon: templateIconName(template),
-    fields: template.fields.map(normalizeField),
+    fields: choiceConfig.fields,
+    optionSets: choiceConfig.optionSets,
     translations: translations as KnowledgeTemplate["translations"],
     markdownTemplate: normalizeMarkdownTemplate(template.markdownTemplate),
   };
@@ -727,8 +731,13 @@ export default function App() {
 
   const previewMarkdown = useMemo(() => {
     if (!selectedTemplate || !selectedEntry) return "";
-    return renderMarkdownTemplate(selectedTemplate, selectedEntry);
-  }, [selectedEntry, selectedTemplate]);
+    return renderMarkdownTemplate(
+      selectedTemplate,
+      selectedEntry,
+      currentLanguage,
+      fallbackLanguage,
+    );
+  }, [currentLanguage, fallbackLanguage, selectedEntry, selectedTemplate]);
 
   const selectedEntryDirty = Boolean(
     selectedBaseEntry && dirtyEntryIds.has(selectedBaseEntry.id),
@@ -1615,6 +1624,7 @@ export default function App() {
         <EntryEditor
           emptyLanguages={selectedEntryLanguageEmpty}
           entry={selectedEntry}
+          fallbackLanguage={fallbackLanguage}
           language={currentLanguage}
           libraryDir={libraryDir}
           markdown={previewMarkdown}
@@ -2016,6 +2026,7 @@ function LanguageSelect({
 function EntryEditor({
   emptyLanguages,
   entry,
+  fallbackLanguage,
   language,
   libraryDir,
   markdown,
@@ -2031,6 +2042,7 @@ function EntryEditor({
 }: {
   emptyLanguages: LanguageEmptyMap;
   entry?: KnowledgeEntry;
+  fallbackLanguage: LanguageCode;
   language: LanguageCode;
   libraryDir: string;
   markdown: string;
@@ -2102,9 +2114,12 @@ function EntryEditor({
           {template.fields.map((field) => (
             <FieldInput
               entryId={entry.id}
+              fallbackLanguage={fallbackLanguage}
               field={field}
               key={field.id}
+              language={language}
               libraryDir={libraryDir}
+              optionSets={template.optionSets}
               templateId={entry.templateId}
               value={entry.values[field.id]}
               onStatus={onStatus}
@@ -2327,21 +2342,33 @@ function resolveMarkdownAssetPath(src: string, entry: KnowledgeEntry) {
 
 function FieldInput({
   entryId,
+  fallbackLanguage,
   field,
+  language,
   libraryDir,
   onChange,
   onStatus,
+  optionSets,
   templateId,
   value,
 }: {
   entryId: string;
+  fallbackLanguage: LanguageCode;
   field: FieldDefinition;
+  language: LanguageCode;
   libraryDir: string;
   onChange: (value: unknown) => void;
   onStatus: (status: Status) => void;
+  optionSets?: TemplateOptionSet[];
   templateId: string;
   value: unknown;
 }) {
+  const choiceOptions = fieldOptionsForTemplate(
+    field,
+    { id: templateId, optionSets } as KnowledgeTemplate,
+    language,
+    fallbackLanguage,
+  );
   const missing = requiredMissing(field, value);
   const label = (
     <label className="input-label">
@@ -2390,7 +2417,7 @@ function FieldInput({
           onChange={(event) => onChange(event.target.value)}
         >
           <option value="">请选择</option>
-          {(field.options ?? []).map((option) => (
+          {choiceOptions.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -2416,7 +2443,7 @@ function FieldInput({
             )
           }
         >
-          {(field.options ?? []).map((option) => (
+          {choiceOptions.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -2989,6 +3016,8 @@ function TemplateDesigner({
   onUpdateDraft: (patch: Partial<KnowledgeTemplate>) => void;
   onUpdateField: (index: number, patch: Partial<FieldDefinition>) => void;
 }) {
+  const [activeDesignerTab, setActiveDesignerTab] =
+    useState<TemplateDesignerTab>("fields");
   const [draggingFieldIndex, setDraggingFieldIndex] = useState<number | null>(null);
   const [dragOverFieldIndex, setDragOverFieldIndex] = useState<number | null>(null);
   const fieldListRef = useRef<HTMLDivElement>(null);
@@ -3091,6 +3120,22 @@ function TemplateDesigner({
 
   return (
     <div className="template-designer">
+      <div className="template-designer-tabs">
+        <button
+          className={activeDesignerTab === "fields" ? "active" : ""}
+          onClick={() => setActiveDesignerTab("fields")}
+        >
+          字段配置
+        </button>
+        <button
+          className={activeDesignerTab === "options" ? "active" : ""}
+          onClick={() => setActiveDesignerTab("options")}
+        >
+          选项配置
+        </button>
+      </div>
+      {activeDesignerTab === "fields" ? (
+      <>
       <div className="designer-panel">
         <div className="panel-heading">
           <div>
@@ -3360,18 +3405,25 @@ function TemplateDesigner({
                   />
                   必填
                 </label>
-                {(field.type === "select" || field.type === "multiselect") && (
+                {isChoiceField(field) && (
                   <label className="wide">
-                    选项
-                    <input
-                      placeholder="用逗号分隔多个选项"
-                      value={optionsToText(field.options)}
+                    选项来源
+                    <select
+                      value={field.optionSetId ?? ""}
                       onChange={(event) =>
                         onUpdateField(index, {
-                          options: textToOptions(event.target.value),
+                          optionSetId: event.target.value || undefined,
+                          options: undefined,
                         })
                       }
-                    />
+                    >
+                      <option value="">未设置</option>
+                      {(draftTemplate.optionSets ?? []).map((optionSet) => (
+                        <option key={optionSet.id} value={optionSet.id}>
+                          {optionSet.name}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                 )}
                 <p className="placeholder-help">
@@ -3401,6 +3453,269 @@ function TemplateDesigner({
           }
         />
       </div>
+      </>
+      ) : (
+      <OptionSetsDesigner
+        draftTemplate={draftTemplate}
+        onCopyTemplate={onCopyTemplate}
+        onDeleteTemplate={onDeleteTemplate}
+        onSaveTemplate={onSaveTemplate}
+        onUpdateDraft={onUpdateDraft}
+      />
+      )}
+    </div>
+  );
+}
+
+function OptionSetsDesigner({
+  draftTemplate,
+  onCopyTemplate,
+  onDeleteTemplate,
+  onSaveTemplate,
+  onUpdateDraft,
+}: {
+  draftTemplate: KnowledgeTemplate;
+  onCopyTemplate: () => void;
+  onDeleteTemplate: () => void;
+  onSaveTemplate: () => void;
+  onUpdateDraft: (patch: Partial<KnowledgeTemplate>) => void;
+}) {
+  const optionSets = draftTemplate.optionSets ?? [];
+
+  function updateOptionSets(nextOptionSets: TemplateOptionSet[]) {
+    onUpdateDraft({ optionSets: nextOptionSets.map((item) => normalizeOptionSet(item)) });
+  }
+
+  function addOptionSet() {
+    const index = optionSets.length + 1;
+    updateOptionSets([
+      ...optionSets,
+      {
+        id: makeId("option-set"),
+        name: `选项 ${index}`,
+        items: [],
+      },
+    ]);
+  }
+
+  function updateOptionSet(index: number, patch: Partial<TemplateOptionSet>) {
+    updateOptionSets(
+      optionSets.map((optionSet, optionSetIndex) =>
+        optionSetIndex === index ? { ...optionSet, ...patch } : optionSet,
+      ),
+    );
+  }
+
+  function removeOptionSet(index: number) {
+    const removed = optionSets[index];
+    onUpdateDraft({
+      optionSets: optionSets.filter((_, optionSetIndex) => optionSetIndex !== index),
+      fields: draftTemplate.fields.map((field) =>
+        field.optionSetId === removed?.id
+          ? { ...field, optionSetId: undefined }
+          : field,
+      ),
+    });
+  }
+
+  function addOptionItem(optionSetIndex: number) {
+    const optionSet = optionSets[optionSetIndex];
+    if (!optionSet) return;
+    const itemIndex = optionSet.items.length + 1;
+    updateOptionSet(optionSetIndex, {
+      items: [
+        ...optionSet.items,
+        {
+          id: makeId("option-item"),
+          value: `option${itemIndex}`,
+          label: `可选内容 ${itemIndex}`,
+          translations: { [defaultLanguage]: `可选内容 ${itemIndex}` },
+        },
+      ],
+    });
+  }
+
+  function updateOptionItem(
+    optionSetIndex: number,
+    itemIndex: number,
+    patch: Partial<TemplateOptionItem>,
+  ) {
+    const optionSet = optionSets[optionSetIndex];
+    if (!optionSet) return;
+    updateOptionSet(optionSetIndex, {
+      items: optionSet.items.map((item, currentIndex) =>
+        currentIndex === itemIndex ? normalizeOptionItem({ ...item, ...patch }) : item,
+      ),
+    });
+  }
+
+  function removeOptionItem(optionSetIndex: number, itemIndex: number) {
+    const optionSet = optionSets[optionSetIndex];
+    if (!optionSet) return;
+    updateOptionSet(optionSetIndex, {
+      items: optionSet.items.filter((_, currentIndex) => currentIndex !== itemIndex),
+    });
+  }
+
+  function updateOptionItemLanguage(
+    optionSetIndex: number,
+    itemIndex: number,
+    language: LanguageCode,
+    text: string,
+  ) {
+    const optionSet = optionSets[optionSetIndex];
+    const item = optionSet?.items[itemIndex];
+    if (!optionSet || !item) return;
+    const translations = { ...(item.translations ?? {}) };
+    if (text.trim()) {
+      translations[language] = text;
+    } else {
+      delete translations[language];
+    }
+    updateOptionItem(optionSetIndex, itemIndex, {
+      label: language === defaultLanguage ? text : item.label,
+      translations,
+    });
+  }
+
+  return (
+    <div className="designer-panel option-sets-panel">
+      <div className="panel-heading">
+        <div>
+          <span>选项配置</span>
+          <strong>给单选和多选字段提供可选内容</strong>
+        </div>
+        <div className="button-row">
+          <button onClick={addOptionSet}>
+            <Plus size={16} />
+            添加选项
+          </button>
+          <button onClick={onCopyTemplate}>
+            <Copy size={16} />
+            复制
+          </button>
+          <button onClick={onSaveTemplate}>
+            <Save size={16} />
+            保存类型
+          </button>
+          <button className="danger-ghost" onClick={onDeleteTemplate}>
+            <Trash2 size={16} />
+            删除
+          </button>
+        </div>
+      </div>
+
+      {optionSets.length === 0 ? (
+        <div className="option-empty">
+          <ListTree size={28} />
+          <span>还没有选项。</span>
+        </div>
+      ) : (
+        <div className="option-set-list">
+          {optionSets.map((optionSet, optionSetIndex) => (
+            <section className="option-set-card" key={optionSet.id}>
+              <div className="option-set-header">
+                <label>
+                  选项名称
+                  <input
+                    value={optionSet.name}
+                    onChange={(event) =>
+                      updateOptionSet(optionSetIndex, {
+                        name: event.target.value,
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  选项 ID
+                  <input disabled value={optionSet.id} />
+                </label>
+                <button onClick={() => addOptionItem(optionSetIndex)}>
+                  <Plus size={16} />
+                  添加可选内容
+                </button>
+                <button
+                  className="danger-ghost"
+                  onClick={() => removeOptionSet(optionSetIndex)}
+                  title="删除选项"
+                >
+                  <Trash2 size={16} />
+                  删除
+                </button>
+              </div>
+
+              <div className="option-item-list">
+                {optionSet.items.length === 0 ? (
+                  <p className="option-item-empty">还没有可选内容。</p>
+                ) : (
+                  optionSet.items.map((item, itemIndex) => (
+                    <div className="option-item-card" key={item.id}>
+                      <div className="option-item-main">
+                        <label>
+                          内容值
+                          <input
+                            value={item.value}
+                            onChange={(event) =>
+                              updateOptionItem(optionSetIndex, itemIndex, {
+                                value: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                        <div>
+                          <span>当前显示</span>
+                          <strong>
+                            {optionItemLabel(
+                              item,
+                              defaultLanguage,
+                              defaultLanguage,
+                            )}
+                          </strong>
+                        </div>
+                        <button
+                          className="danger-ghost"
+                          onClick={() => removeOptionItem(optionSetIndex, itemIndex)}
+                          title="删除可选内容"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                      <div className="option-locales">
+                        {supportedLanguages.map((language) => (
+                          <label key={language.code}>
+                            <span>
+                              <i
+                                aria-hidden="true"
+                                className={`language-flag flag-${language.code}`}
+                              />
+                              {language.label}
+                            </span>
+                            <input
+                              value={
+                                language.code === defaultLanguage
+                                  ? item.label
+                                  : item.translations?.[language.code] ?? ""
+                              }
+                              onChange={(event) =>
+                                updateOptionItemLanguage(
+                                  optionSetIndex,
+                                  itemIndex,
+                                  language.code,
+                                  event.target.value,
+                                )
+                              }
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
