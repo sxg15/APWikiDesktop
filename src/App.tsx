@@ -4,14 +4,13 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent,
   type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   AlertCircle,
-  ArrowDown,
-  ArrowUp,
   Box,
   BookOpen,
   Boxes,
@@ -27,6 +26,7 @@ import {
   FolderOpen,
   Gamepad2,
   Grid3x3,
+  GripVertical,
   Image as ImageIcon,
   Images,
   Layers,
@@ -100,6 +100,10 @@ import {
   richImageHasFrames,
 } from "./richImage";
 import { parseRichImageMarkdown } from "./richImageMarkdown";
+import {
+  normalizeTileSizeValue,
+  tileSizeHasCells,
+} from "./tileSize";
 import type {
   FieldDefinition,
   FieldOption,
@@ -109,6 +113,7 @@ import type {
   KnowledgeTemplateTranslation,
   ParameterRow,
   RichImageValue,
+  TileSizeValue,
 } from "./types";
 
 type EntryView = "edit" | "preview";
@@ -130,6 +135,7 @@ const fieldTypeLabels: Record<FieldType, string> = {
   richImage: "富图片",
   image: "富图片",
   frameSequence: "富图片",
+  tileSize: "瓦片尺寸",
   markdown: "Markdown 文本",
 };
 
@@ -143,6 +149,7 @@ const fieldTypes: FieldType[] = [
   "tags",
   "parameterTable",
   "richImage",
+  "tileSize",
   "markdown",
 ];
 const fieldsWithoutTextDefault = new Set<FieldType>([
@@ -152,6 +159,7 @@ const fieldsWithoutTextDefault = new Set<FieldType>([
   "richImage",
   "image",
   "frameSequence",
+  "tileSize",
 ]);
 
 const templateIcons: Record<string, LucideIcon> = {
@@ -304,12 +312,16 @@ function makeId(prefix: string) {
 }
 
 function slugify(value: string, fallback: string) {
-  const normalized = value
+  const normalized = normalizeSlugInput(value);
+  return normalized || fallback;
+}
+
+function normalizeSlugInput(value: string) {
+  return value
     .trim()
     .replace(/\s+/g, "-")
     .replace(/[^\u4e00-\u9fa5a-zA-Z0-9_-]/g, "")
     .slice(0, 48);
-  return normalized || fallback;
 }
 
 function safeFileName(value: string) {
@@ -337,6 +349,9 @@ function requiredMissing(field: FieldDefinition, value: unknown) {
   ) {
     return !richImageHasFrames(value);
   }
+  if (field.type === "tileSize") {
+    return !tileSizeHasCells(value);
+  }
   if (Array.isArray(value)) return value.length === 0;
   if (typeof value === "boolean") return false;
   return value === undefined || value === null || String(value).trim() === "";
@@ -355,6 +370,14 @@ function hasMeaningfulValue(value: unknown): boolean {
   if (value && typeof value === "object") {
     if ("frames" in value && "sampling" in value && "compression" in value) {
       return richImageHasFrames(value);
+    }
+    if (
+      "up" in value &&
+      "right" in value &&
+      "down" in value &&
+      "left" in value
+    ) {
+      return tileSizeHasCells(value);
     }
     return Object.values(value).some((item) => hasMeaningfulValue(item));
   }
@@ -501,7 +524,16 @@ function normalizeField(field: FieldDefinition): FieldDefinition {
           : normalizeRichImageValue(
               field.defaultValue,
               field.type === "frameSequence" ? "sequence" : "single",
-            ),
+        ),
+    };
+  }
+  if (field.type === "tileSize") {
+    return {
+      ...field,
+      defaultValue:
+        field.defaultValue === undefined
+          ? undefined
+          : normalizeTileSizeValue(field.defaultValue),
     };
   }
   return field;
@@ -540,16 +572,28 @@ function normalizeEntry(entry: KnowledgeEntry, template?: KnowledgeTemplate): Kn
 function normalizeEntryValues(
   values: Record<string, unknown>,
   template?: KnowledgeTemplate,
-  fillMissingRichImages = true,
+  fillMissingStructuredValues = true,
 ) {
   const next: Record<string, unknown> =
     values.group !== undefined || values.category === undefined
       ? { ...values }
       : { ...values, group: values.category };
   for (const field of template?.fields ?? []) {
-    if (field.type !== "richImage") continue;
-    if (!fillMissingRichImages && next[field.id] === undefined) continue;
-    next[field.id] = normalizeRichImageValue(next[field.id]);
+    if (
+      field.type === "richImage" ||
+      field.type === "image" ||
+      field.type === "frameSequence"
+    ) {
+      if (!fillMissingStructuredValues && next[field.id] === undefined) continue;
+      next[field.id] = normalizeRichImageValue(
+        next[field.id],
+        field.type === "frameSequence" ? "sequence" : "single",
+      );
+    }
+    if (field.type === "tileSize") {
+      if (!fillMissingStructuredValues && next[field.id] === undefined) continue;
+      next[field.id] = normalizeTileSizeValue(next[field.id]);
+    }
   }
   return next;
 }
@@ -1288,15 +1332,22 @@ export default function App() {
     });
   }
 
-  function moveDraftField(index: number, direction: -1 | 1) {
+  function reorderDraftField(fromIndex: number, toIndex: number) {
     setTemplateDirty(true);
     setDraftTemplate((current) => {
       if (!current) return current;
-      const target = index + direction;
-      if (target < 0 || target >= current.fields.length) return current;
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= current.fields.length ||
+        toIndex >= current.fields.length
+      ) {
+        return current;
+      }
       const fields = [...current.fields];
-      const [field] = fields.splice(index, 1);
-      fields.splice(target, 0, field);
+      const [field] = fields.splice(fromIndex, 1);
+      fields.splice(toIndex, 0, field);
       return { ...current, fields };
     });
   }
@@ -1592,7 +1643,7 @@ export default function App() {
         }
         onCopyTemplate={handleCopyTemplate}
         onDeleteTemplate={handleDeleteTemplate}
-        onMoveField={moveDraftField}
+        onReorderField={reorderDraftField}
         onRemoveField={removeDraftField}
         onSaveTemplate={handleSaveTemplate}
         onSelectLanguage={(language) => void handleChangeLanguage(language)}
@@ -1665,7 +1716,7 @@ function TemplateEditorDialog({
   onClose,
   onCopyTemplate,
   onDeleteTemplate,
-  onMoveField,
+  onReorderField,
   onRemoveField,
   onSaveTemplate,
   onSelectLanguage,
@@ -1683,7 +1734,7 @@ function TemplateEditorDialog({
   onClose: () => void;
   onCopyTemplate: () => void;
   onDeleteTemplate: () => void;
-  onMoveField: (index: number, direction: -1 | 1) => void;
+  onReorderField: (fromIndex: number, toIndex: number) => void;
   onRemoveField: (index: number) => void;
   onSaveTemplate: () => void;
   onSelectLanguage: (language: LanguageCode) => void;
@@ -1724,7 +1775,7 @@ function TemplateEditorDialog({
           onClearIcon={onClearIcon}
           onCopyTemplate={onCopyTemplate}
           onDeleteTemplate={onDeleteTemplate}
-          onMoveField={onMoveField}
+          onReorderField={onReorderField}
           onRemoveField={onRemoveField}
           onSaveTemplate={onSaveTemplate}
           onUploadIcon={onUploadIcon}
@@ -2103,6 +2154,11 @@ function EntryEditor({
                 libraryDir={libraryDir}
                 value={segment.value}
               />
+            ) : segment.type === "tileSize" ? (
+              <MarkdownTileSize
+                key={`tile-size-${index}`}
+                value={segment.value}
+              />
             ) : (
               <ReactMarkdown
                 components={{
@@ -2126,6 +2182,19 @@ function EntryEditor({
       </div>
       )}
     </div>
+  );
+}
+
+function MarkdownTileSize({ value }: { value: TileSizeValue }) {
+  const tileSize = normalizeTileSizeValue(value);
+  return (
+    <figure className="markdown-tile-size">
+      <TileSizePreview value={tileSize} />
+      <figcaption>
+        上 {tileSize.up} / 右 {tileSize.right} / 下 {tileSize.down} / 左{" "}
+        {tileSize.left}
+      </figcaption>
+    </figure>
   );
 }
 
@@ -2387,6 +2456,16 @@ function FieldInput({
     );
   }
 
+  if (field.type === "tileSize") {
+    return (
+      <TileSizeInput
+        label={label}
+        onChange={onChange}
+        value={normalizeTileSizeValue(value)}
+      />
+    );
+  }
+
   if (
     field.type === "richImage" ||
     field.type === "image" ||
@@ -2421,6 +2500,86 @@ function FieldInput({
             field.type === "number" ? Number(event.target.value) : event.target.value,
           )
         }
+      />
+    </div>
+  );
+}
+
+const tileSizeParts = [
+  ["up", "上"],
+  ["right", "右"],
+  ["down", "下"],
+  ["left", "左"],
+] as const;
+
+function TileSizeInput({
+  label,
+  onChange,
+  value,
+}: {
+  label: ReactNode;
+  onChange: (value: TileSizeValue) => void;
+  value: TileSizeValue;
+}) {
+  const tileSize = normalizeTileSizeValue(value);
+
+  function updatePart(part: keyof TileSizeValue, rawValue: string) {
+    const parsed = Number(rawValue);
+    onChange(
+      normalizeTileSizeValue({
+        ...tileSize,
+        [part]: Number.isFinite(parsed) ? parsed : 0,
+      }),
+    );
+  }
+
+  return (
+    <div className="form-field">
+      {label}
+      <div className="tile-size-field">
+        <div className="tile-size-controls">
+          {tileSizeParts.map(([part, partLabel]) => (
+            <label key={part}>
+              {partLabel}
+              <input
+                min={0}
+                step={1}
+                type="number"
+                value={tileSize[part]}
+                onChange={(event) => updatePart(part, event.target.value)}
+              />
+            </label>
+          ))}
+        </div>
+        <TileSizePreview value={tileSize} />
+      </div>
+    </div>
+  );
+}
+
+function TileSizePreview({ value }: { value: TileSizeValue }) {
+  const tileSize = normalizeTileSizeValue(value);
+  const columns = tileSize.left + tileSize.right + 1;
+  const rows = tileSize.up + tileSize.down + 1;
+  const cellSize = Math.max(18, Math.min(36, Math.floor(220 / Math.max(columns, rows))));
+  const style = {
+    gridTemplateColumns: `repeat(${columns}, ${cellSize}px)`,
+    gridTemplateRows: `repeat(${rows}, ${cellSize}px)`,
+  } as CSSProperties;
+  const originStyle = {
+    left: 8 + tileSize.left * cellSize + cellSize / 2,
+    top: 8 + tileSize.up * cellSize + cellSize / 2,
+  } as CSSProperties;
+
+  return (
+    <div className="tile-size-preview" style={style}>
+      {Array.from({ length: rows * columns }).map((_, index) => (
+        <span aria-hidden="true" className="tile-size-cell" key={index} />
+      ))}
+      <span
+        aria-label="基准点"
+        className="tile-size-origin-dot"
+        style={originStyle}
       />
     </div>
   );
@@ -2810,7 +2969,7 @@ function TemplateDesigner({
   onClearIcon,
   onCopyTemplate,
   onDeleteTemplate,
-  onMoveField,
+  onReorderField,
   onRemoveField,
   onSaveTemplate,
   onUploadIcon,
@@ -2823,13 +2982,50 @@ function TemplateDesigner({
   onClearIcon: () => void;
   onCopyTemplate: () => void;
   onDeleteTemplate: () => void;
-  onMoveField: (index: number, direction: -1 | 1) => void;
+  onReorderField: (fromIndex: number, toIndex: number) => void;
   onRemoveField: (index: number) => void;
   onSaveTemplate: () => void;
   onUploadIcon: () => void;
   onUpdateDraft: (patch: Partial<KnowledgeTemplate>) => void;
   onUpdateField: (index: number, patch: Partial<FieldDefinition>) => void;
 }) {
+  const [draggingFieldIndex, setDraggingFieldIndex] = useState<number | null>(null);
+  const [dragOverFieldIndex, setDragOverFieldIndex] = useState<number | null>(null);
+
+  function handleFieldDragStart(
+    event: DragEvent<HTMLElement>,
+    index: number,
+  ) {
+    setDraggingFieldIndex(index);
+    setDragOverFieldIndex(index);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(index));
+  }
+
+  function handleFieldDragOver(event: DragEvent<HTMLDivElement>, index: number) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOverFieldIndex(index);
+  }
+
+  function handleFieldDrop(event: DragEvent<HTMLDivElement>, index: number) {
+    event.preventDefault();
+    const transferredIndex = Number(event.dataTransfer.getData("text/plain"));
+    const fromIndex = Number.isInteger(transferredIndex)
+      ? transferredIndex
+      : draggingFieldIndex;
+    if (fromIndex !== null && fromIndex !== index) {
+      onReorderField(fromIndex, index);
+    }
+    setDraggingFieldIndex(null);
+    setDragOverFieldIndex(null);
+  }
+
+  function clearFieldDragState() {
+    setDraggingFieldIndex(null);
+    setDragOverFieldIndex(null);
+  }
+
   if (!draftTemplate) {
     return (
       <div className="workspace-empty">
@@ -2840,7 +3036,10 @@ function TemplateDesigner({
   }
   const textFields = draftTemplate.fields.filter((field) => field.type === "text");
   const mediaFields = draftTemplate.fields.filter(
-    (field) => field.type === "richImage",
+    (field) =>
+      field.type === "richImage" ||
+      field.type === "image" ||
+      field.type === "frameSequence",
   );
   const titleFieldId = textFields.some(
     (field) => field.id === draftTemplate.titleFieldId,
@@ -3018,9 +3217,36 @@ function TemplateDesigner({
         </div>
         <div className="field-designer-list">
           {draftTemplate.fields.map((field, index) => (
-            <div className="field-designer-card" key={`${field.id}-${index}`}>
+            <div
+              className={`field-designer-card ${
+                draggingFieldIndex === index ? "dragging" : ""
+              } ${
+                dragOverFieldIndex === index && draggingFieldIndex !== index
+                  ? "drag-over"
+                  : ""
+              }`}
+              data-field-id={field.id}
+              data-field-index={index}
+              key={index}
+              onDragEnd={clearFieldDragState}
+              onDragLeave={() => {
+                if (dragOverFieldIndex === index) setDragOverFieldIndex(null);
+              }}
+              onDragOver={(event) => handleFieldDragOver(event, index)}
+              onDrop={(event) => handleFieldDrop(event, index)}
+            >
               <div className="field-card-top">
-                <span>{index + 1}</span>
+                <span
+                  className="field-drag-handle"
+                  draggable
+                  onDragStart={(event) => handleFieldDragStart(event, index)}
+                  role="button"
+                  tabIndex={0}
+                  title="拖动调整位置"
+                >
+                  <GripVertical size={16} />
+                </span>
+                <span className="field-order">{index + 1}</span>
                 <input
                   value={field.label}
                   onChange={(event) =>
@@ -3028,7 +3254,7 @@ function TemplateDesigner({
                       label: event.target.value,
                       id:
                         field.id.startsWith("field") || !field.id
-                          ? slugify(event.target.value, field.id)
+                          ? slugify(event.target.value, field.id || `field${index + 1}`)
                           : field.id,
                     })
                   }
@@ -3053,12 +3279,6 @@ function TemplateDesigner({
                     </option>
                   ))}
                 </select>
-                <button onClick={() => onMoveField(index, -1)} title="上移">
-                  <ArrowUp size={15} />
-                </button>
-                <button onClick={() => onMoveField(index, 1)} title="下移">
-                  <ArrowDown size={15} />
-                </button>
                 <button
                   className="danger-ghost"
                   onClick={() => onRemoveField(index)}
@@ -3074,7 +3294,7 @@ function TemplateDesigner({
                     value={field.id}
                     onChange={(event) =>
                       onUpdateField(index, {
-                        id: slugify(event.target.value, field.id),
+                        id: normalizeSlugInput(event.target.value),
                       })
                     }
                   />

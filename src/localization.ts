@@ -1,5 +1,6 @@
 import { defaultLanguage, type LanguageCode } from "./i18n";
 import { normalizeRichImageValue, richImageHasFrames } from "./richImage";
+import { normalizeTileSizeValue, tileSizeHasCells } from "./tileSize";
 import type {
   FieldType,
   FieldDefinition,
@@ -226,6 +227,11 @@ function mergeEntryValues(
       .filter((field) => isRichImageFieldType(field.type))
       .map((field) => field.id),
   );
+  const tileSizeFieldIds = new Set(
+    (template?.fields ?? [])
+      .filter((field) => field.type === "tileSize")
+      .map((field) => field.id),
+  );
   const next = { ...baseValues, ...fallbackValues };
   for (const [fieldId, value] of Object.entries(selectedValues ?? {})) {
     if (
@@ -235,8 +241,17 @@ function mergeEntryValues(
     ) {
       continue;
     }
+    if (
+      tileSizeFieldIds.has(fieldId) &&
+      !tileSizeHasCells(value) &&
+      tileSizeHasCells(next[fieldId])
+    ) {
+      continue;
+    }
     next[fieldId] = richImageFieldIds.has(fieldId)
       ? normalizeRichImageValue(value)
+      : tileSizeFieldIds.has(fieldId)
+        ? normalizeTileSizeValue(value)
       : value;
   }
   return next;

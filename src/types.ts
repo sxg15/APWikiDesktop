@@ -12,6 +12,7 @@ export type FieldType =
   | "richImage"
   | "image"
   | "frameSequence"
+  | "tileSize"
   | "markdown";
 
 export interface FieldOption {
@@ -68,6 +69,13 @@ export interface RichImageValue {
   loop: boolean;
   sampling: "point";
   compression: "none";
+}
+
+export interface TileSizeValue {
+  up: number;
+  right: number;
+  down: number;
+  left: number;
 }
 
 export interface KnowledgeEntry {

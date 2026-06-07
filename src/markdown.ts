@@ -4,11 +4,16 @@ import type {
   KnowledgeTemplate,
   ParameterRow,
   RichImageValue,
+  TileSizeValue,
 } from "./types";
 import {
   defaultRichImageValue,
   normalizeRichImageValue,
 } from "./richImage";
+import {
+  defaultTileSizeValue,
+  normalizeTileSizeValue,
+} from "./tileSize";
 
 export function defaultValueForField(field: FieldDefinition): unknown {
   if (field.defaultValue !== undefined) return field.defaultValue;
@@ -30,6 +35,7 @@ export function defaultValueForField(field: FieldDefinition): unknown {
     );
   }
   if (field.type === "parameterTable") return [];
+  if (field.type === "tileSize") return defaultTileSizeValue();
   return "";
 }
 
@@ -138,6 +144,7 @@ function formatValue(field: FieldDefinition, value: unknown, entry: KnowledgeEnt
   ) {
     return formatRichImage(field.label, value, entry, field.type);
   }
+  if (field.type === "tileSize") return formatTileSize(value);
   if (field.type === "boolean") return value ? "是" : "否";
   if (value === null || value === undefined) return "";
   return String(value);
@@ -162,6 +169,11 @@ function formatRichImage(
     compression: "none",
   };
   return `\n\n:::ap-rich-image\n${JSON.stringify(payload)}\n:::\n\n`;
+}
+
+function formatTileSize(value: unknown) {
+  const tileSize: TileSizeValue = normalizeTileSizeValue(value);
+  return `\n\n:::ap-tile-size\n${JSON.stringify(tileSize)}\n:::\n\n`;
 }
 
 function isRichImageField(field: FieldDefinition) {
