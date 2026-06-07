@@ -8,12 +8,14 @@ export function defaultTileSizeValue(): TileSizeValue {
 
 export function normalizeTileSizeValue(value: unknown): TileSizeValue {
   if (!value || typeof value !== "object") return defaultTileSizeValue();
-  const source = value as Partial<Record<(typeof tileSizeKeys)[number], unknown>>;
+  const source = value as Partial<
+    Record<(typeof tileSizeKeys)[number] | "上" | "右" | "下" | "左", unknown>
+  >;
   return {
-    up: normalizeTileSizeNumber(source.up),
-    right: normalizeTileSizeNumber(source.right),
-    down: normalizeTileSizeNumber(source.down),
-    left: normalizeTileSizeNumber(source.left),
+    up: normalizeTileSizeNumber(source.up ?? source["上"]),
+    right: normalizeTileSizeNumber(source.right ?? source["右"]),
+    down: normalizeTileSizeNumber(source.down ?? source["下"]),
+    left: normalizeTileSizeNumber(source.left ?? source["左"]),
   };
 }
 

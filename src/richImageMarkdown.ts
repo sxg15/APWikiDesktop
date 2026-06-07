@@ -68,14 +68,54 @@ function parseRichImageBlock(value: string): MarkdownRichImageSegment | undefine
 }
 
 function parseTileSizeBlock(value: string): MarkdownRichImageSegment | undefined {
+  const normalized = stripCodeFence(value.trim());
   try {
     return {
       type: "tileSize",
-      value: normalizeTileSizeValue(JSON.parse(stripCodeFence(value.trim()))),
+      value: normalizeTileSizeValue(JSON.parse(normalized)),
     };
   } catch {
+    const parsed = parseTileSizeText(normalized);
+    return parsed ? { type: "tileSize", value: parsed } : undefined;
+  }
+}
+
+function parseTileSizeText(value: string): TileSizeValue | undefined {
+  const parts: Partial<TileSizeValue> = {};
+  const keyMap: Record<string, keyof TileSizeValue> = {
+    up: "up",
+    u: "up",
+    top: "up",
+    上: "up",
+    right: "right",
+    r: "right",
+    右: "right",
+    down: "down",
+    d: "down",
+    bottom: "down",
+    下: "down",
+    left: "left",
+    l: "left",
+    左: "left",
+  };
+
+  for (const match of value.matchAll(
+    /(up|top|right|down|bottom|left|[urdl]|上|右|下|左)\s*[:：=]?\s*(-?\d+(?:\.\d+)?)/giu,
+  )) {
+    const key = keyMap[match[1].toLowerCase()] ?? keyMap[match[1]];
+    if (key) parts[key] = Number(match[2]);
+  }
+
+  if (
+    parts.up === undefined &&
+    parts.right === undefined &&
+    parts.down === undefined &&
+    parts.left === undefined
+  ) {
     return undefined;
   }
+
+  return normalizeTileSizeValue(parts);
 }
 
 function stripCodeFence(value: string) {

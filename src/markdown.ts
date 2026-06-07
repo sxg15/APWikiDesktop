@@ -13,6 +13,7 @@ import {
 import {
   defaultTileSizeValue,
   normalizeTileSizeValue,
+  tileSizeHasCells,
 } from "./tileSize";
 
 export function defaultValueForField(field: FieldDefinition): unknown {
@@ -105,7 +106,7 @@ export function renderMarkdownTemplate(
 ) {
   const byId = new Map(template.fields.map((field) => [field.id, field]));
   const byLabel = new Map(template.fields.map((field) => [field.label, field]));
-  const richImageFields = template.fields.filter(isRichImageField);
+  const autoAppendFields = template.fields.filter(isAutoAppendField);
 
   const rendered = template.markdownTemplate.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => {
     const normalized = String(key).trim();
@@ -118,11 +119,12 @@ export function renderMarkdownTemplate(
     if (!field) return "";
     return formatValue(field, entry.values[field.id], entry);
   });
-  const missingRichImages = richImageFields
+  const missingBlocks = autoAppendFields
     .filter((field) => !templateUsesField(template.markdownTemplate, field))
+    .filter((field) => fieldHasPreviewValue(field, entry.values[field.id]))
     .map((field) => formatValue(field, entry.values[field.id], entry))
     .filter(Boolean);
-  return insertAfterFirstHeading(rendered, missingRichImages.join("\n\n"));
+  return insertAfterFirstHeading(rendered, missingBlocks.join("\n\n"));
 }
 
 export function formatDate(value: string) {
@@ -182,6 +184,18 @@ function isRichImageField(field: FieldDefinition) {
     field.type === "image" ||
     field.type === "frameSequence"
   );
+}
+
+function isAutoAppendField(field: FieldDefinition) {
+  return isRichImageField(field) || field.type === "tileSize";
+}
+
+function fieldHasPreviewValue(field: FieldDefinition, value: unknown) {
+  if (isRichImageField(field)) {
+    return normalizeRichImageValue(value).frames.length > 0;
+  }
+  if (field.type === "tileSize") return tileSizeHasCells(value);
+  return false;
 }
 
 function templateUsesField(markdownTemplate: string, field: FieldDefinition) {

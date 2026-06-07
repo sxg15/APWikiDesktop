@@ -1356,9 +1356,12 @@ textarea {
 .tile-size-preview {
   position: relative;
   display: grid;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 100%;
   justify-content: center;
   justify-self: start;
-  overflow: hidden;
+  overflow: auto;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
